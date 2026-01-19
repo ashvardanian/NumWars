@@ -1,0 +1,20 @@
+# NumWars Python Dependencies
+# Install with: pip install -r requirements.txt
+
+# Core numerical libraries
+numkong>=6.3.0
+numpy>=2.2
+scipy>=1.15
+scikit-learn>=1.6
+
+# Exotic ML data types
+ml_dtypes>=0.5.0
+
+# Formatting and output
+tabulate>=0.9
+
+# Optional: Heavy ML frameworks
+# Uncomment if needed or install with: pip install -e ".[ml]"
+# torch>=2.6
+# tensorflow>=2.18
+# jax>=0.4

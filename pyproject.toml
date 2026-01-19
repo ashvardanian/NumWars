@@ -1,0 +1,48 @@
+[project]
+name = "numwars"
+version = "0.1.0"
+description = "Mixed-precision numerics benchmarks: NumKong vs competitors"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "NumWars Contributors" }]
+keywords = ["benchmark", "simd", "numerical", "performance"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Libraries",
+]
+dependencies = [] # Minimal base
+
+[project.optional-dependencies]
+similarity = [
+    "numkong>=6.3.0",
+    "numpy>=2.2",
+    "scipy>=1.15",
+    "scikit-learn>=1.6",
+    "tabulate>=0.9",
+    "ml_dtypes>=0.5.0",
+]
+each = ["numkong>=6.3.0", "numpy>=2.2", "tabulate>=0.9", "ml_dtypes>=0.5.0"]
+dots = ["numkong>=6.3.0", "numpy>=2.2", "tabulate>=0.9", "ml_dtypes>=0.5.0"]
+ml = ["torch>=2.6", "tensorflow>=2.18", "jax>=0.4"]
+all = ["numwars[similarity,each,dots,ml]"]
+
+[project.urls]
+Homepage = "https://github.com/ashvardanian/NumWars"
+Repository = "https://github.com/ashvardanian/NumWars"
+Issues = "https://github.com/ashvardanian/NumWars/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
