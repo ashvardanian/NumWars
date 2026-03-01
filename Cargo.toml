@@ -1,59 +1,59 @@
 [package]
-name = "numwars"
-version = "0.1.0"
-edition = "2021"
-rust-version = "1.75.0"
-license = "Apache-2.0"
-authors = ["NumWars Contributors"]
-description = "Mixed-precision numerics benchmarks: NumKong vs competitors"
-repository = "https://github.com/ashvardanian/NumWars"
-keywords = ["benchmark", "simd", "numerical", "performance"]
+authors = ["Ash Vardanian"]
 categories = ["algorithms", "mathematics", "science"]
+description = "Mixed-precision numerics benchmarks: NumKong vs competitors"
+edition = "2021"
+keywords = ["benchmark", "simd", "numerical", "performance"]
+license = "Apache-2.0"
+name = "numwars"
+repository = "https://github.com/ashvardanian/NumWars"
+rust-version = "1.75.0"
+version = "0.1.0"
 
 [dependencies]
-criterion = { version = "0.5", default-features = false }
-numkong = { path = "../SimSIMD", default-features = false }
-rand = { version = "0.8", optional = true }
-num-traits = { version = "0.2", optional = true }
-half = { version = "2.4", optional = true }
-regex = "1.11"
+criterion = {version = "0.8", default-features = false}
+half = {version = "2.4", optional = true}
+num-traits = {version = "0.2", optional = true}
 num_cpus = "1.16"
+numkong = {path = "../SimSIMD", default-features = false}
+rand = {version = "0.10", optional = true}
+regex = "1.11"
 
 # Competitors (all optional)
-ndarray = { version = "0.16", optional = true }
-nalgebra = { version = "0.33", optional = true }
-faer = { version = "0.19", optional = true }
-fork_union = { version = "2.3", optional = true }
+faer = {version = "0.24", optional = true}
+fork_union = {version = "2.3", optional = true}
+nalgebra = {version = "0.34", optional = true}
+ndarray = {version = "0.17", optional = true}
 
 [features]
-default = []
-bench_similarity = ["rand", "num-traits", "half"]
-bench_each = ["rand", "num-traits", "half"]
-bench_dots = ["rand", "fork_union", "ndarray", "nalgebra", "faer", "half"]
 all = ["bench_similarity", "bench_each", "bench_dots"]
+bench_dots = ["rand", "fork_union", "ndarray", "nalgebra", "faer", "half"]
+bench_each = ["rand", "num-traits", "half"]
+bench_similarity = ["rand", "num-traits", "half"]
+default = []
 
 [[bench]]
+harness = false
 name = "bench_similarity"
 path = "similarity/bench.rs"
-harness = false
 required-features = ["bench_similarity"]
 
 [[bench]]
+harness = false
 name = "bench_each"
 path = "each/bench.rs"
-harness = false
 required-features = ["bench_each"]
 
 [[bench]]
+harness = false
 name = "bench_dots"
 path = "dots/bench.rs"
-harness = false
 required-features = ["bench_dots"]
 
 [profile.release]
-opt-level = 3
-lto = "thin"
 codegen-units = 1
+lto = "thin"
+opt-level = 3
 
 [profile.bench]
 inherits = "release"
