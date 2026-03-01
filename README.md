@@ -68,7 +68,7 @@ python dots/bench.py
 Pairwise vector distance and similarity metrics.
 
 __Metrics:__
-- __Spatial__: dot, cosine, L2, L2²
+- __Spatial__: dot, angular, euclidean, sqeuclidean
 - __Binary__: hamming, jaccard
 - __Probability__: jensen-shannon, kullback-leibler
 
@@ -86,7 +86,7 @@ NUMWARS_FILTER="f32" cargo bench --features bench_similarity
 python similarity/bench.py
 
 # Python - filter to specific metrics/types
-NUMWARS_FILTER="cosine.*f32" python similarity/bench.py
+NUMWARS_FILTER="angular.*f32" python similarity/bench.py
 ```
 
 See [similarity/README.md](similarity/README.md) for details.
@@ -149,7 +149,7 @@ All benchmarks support configuration via environment variables. The key principl
 
 ```bash
 # Universal filter - applies regex to full benchmark names
-# Examples: "f32", "cosine|dot", "similarity/cosine/f32"
+# Examples: "f32", "angular|dot", "similarity/angular/f32"
 export NUMWARS_FILTER="f32"
 
 # Timing parameters
@@ -174,10 +174,10 @@ export NUMWARS_MODE=batch          # "batch" or "all-pairs"
 __Filtering__ (use hierarchical names):
 ```bash
 # Benchmark names: similarity/{library}/{metric}/{dtype}
-# Examples: similarity/numkong/cosine/f32, similarity/baseline/dot/f64
+# Examples: similarity/numkong/angular/f32, similarity/baseline/dot/f64
 
 NUMWARS_FILTER="f32"                      # Only f32 benchmarks
-NUMWARS_FILTER="cosine|dot"               # Only cosine and dot metrics
+NUMWARS_FILTER="angular|dot"               # Only angular and dot metrics
 NUMWARS_FILTER="similarity/numkong"       # Only NumKong library
 ```
 
@@ -308,7 +308,7 @@ All benchmarks report:
 
 Example output:
 ```
-similarity/numkong/cosine/f32       2.15 µs   45.2 GB/s   234 MegaOps/s
+similarity/numkong/angular/f32      2.15 µs   45.2 GB/s   234 MegaOps/s
 similarity/numkong/dot/f64          3.82 µs   51.3 GB/s   187 MegaOps/s
 each/numkong/add/f32                1.23 µs   42.1 GB/s   1.23 GigaOps/s
 dots/numkong/f32/1024x1024x1024/8t  8.45 ms   215 GigaOps/s
@@ -319,8 +319,8 @@ dots/numkong/f32/1024x1024x1024/8t  8.45 ms   215 GigaOps/s
 ### Running Specific Benchmarks
 
 ```bash
-# Run only f32 cosine similarity
-NUMWARS_FILTER="cosine.*f32" cargo bench --features bench_similarity
+# Run only f32 angular similarity
+NUMWARS_FILTER="angular.*f32" cargo bench --features bench_similarity
 
 # Run 512-dimensional vectors
 NUMWARS_DIMS=512 python similarity/bench.py

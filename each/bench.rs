@@ -98,7 +98,9 @@ pub fn bench_add(c: &mut Criterion) {
     let mut rng = rand::thread_rng();
 
     let mut group = c.benchmark_group("each/add");
-    group.throughput(Throughput::Bytes((size * std::mem::size_of::<f32>()) as u64));
+    group.throughput(Throughput::Bytes(
+        (size * std::mem::size_of::<f32>()) as u64,
+    ));
 
     // f32
     if should_run_benchmark("each/add/f32") {
@@ -139,7 +141,9 @@ pub fn bench_multiply(c: &mut Criterion) {
     let mut rng = rand::thread_rng();
 
     let mut group = c.benchmark_group("each/multiply");
-    group.throughput(Throughput::Bytes((size * std::mem::size_of::<f32>()) as u64));
+    group.throughput(Throughput::Bytes(
+        (size * std::mem::size_of::<f32>()) as u64,
+    ));
 
     // f32
     if should_run_benchmark("each/multiply/f32") {
@@ -180,7 +184,9 @@ pub fn bench_scale(c: &mut Criterion) {
     let mut rng = rand::thread_rng();
 
     let mut group = c.benchmark_group("each/scale");
-    group.throughput(Throughput::Bytes((size * std::mem::size_of::<f32>()) as u64));
+    group.throughput(Throughput::Bytes(
+        (size * std::mem::size_of::<f32>()) as u64,
+    ));
 
     // f32
     if should_run_benchmark("each/scale/f32") {
@@ -220,7 +226,9 @@ pub fn bench_wsum(c: &mut Criterion) {
     let mut rng = rand::thread_rng();
 
     let mut group = c.benchmark_group("each/wsum");
-    group.throughput(Throughput::Bytes((size * std::mem::size_of::<f32>()) as u64));
+    group.throughput(Throughput::Bytes(
+        (size * std::mem::size_of::<f32>()) as u64,
+    ));
 
     // f32
     if should_run_benchmark("each/wsum/f32") {
@@ -254,7 +262,9 @@ pub fn bench_fma(c: &mut Criterion) {
     let mut rng = rand::thread_rng();
 
     let mut group = c.benchmark_group("each/fma");
-    group.throughput(Throughput::Bytes((size * std::mem::size_of::<f32>()) as u64));
+    group.throughput(Throughput::Bytes(
+        (size * std::mem::size_of::<f32>()) as u64,
+    ));
 
     // f32
     if should_run_benchmark("each/fma/f32") {

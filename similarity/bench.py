@@ -48,7 +48,7 @@ np.seterr(all="ignore")
 
 metric_families = [
     "dot",  # Dot product
-    "spatial",  # Euclidean and Cosine distance
+    "spatial",  # Euclidean and Angular distance
     "binary",  # Hamming and Jaccard distance for binary vectors
     "probability",  # Jensen-Shannon and Kullback-Leibler divergences for probability distributions
     "sparse",  # Intersection of two sparse integer sets, with float/int weights
@@ -82,8 +82,8 @@ class Kernel:
     tensor_type: callable = np.array
 
 
-def serial_cosine(a: List[float], b: List[float]) -> float:
-    """Cosine distance: 1 - ∑(aᵢ · bᵢ) / (‖a‖ · ‖b‖)"""
+def serial_angular(a: List[float], b: List[float]) -> float:
+    """Angular distance: 1 - ∑(aᵢ · bᵢ) / (‖a‖ · ‖b‖)"""
     dot_product = sum(ai * bi for ai, bi in zip(a, b))
     norm_a = sum(ai * ai for ai in a) ** 0.5
     norm_b = sum(bi * bi for bi in b) ** 0.5
@@ -228,11 +228,11 @@ def yield_kernels(
         yield from for_dtypes(
             "serial.angular",
             ["float64", "float32", "float16", "int8"],
-            serial_cosine,
-            wrap_rows_batch_calls(serial_cosine),
+            serial_angular,
+            wrap_rows_batch_calls(serial_angular),
             lambda A, B: spd.cdist(A, B, "cosine"),
             nk.angular,
-            lambda A, B: nk.cdist(A, B, metric="cosine"),
+            lambda A, B: nk.cdist(A, B, metric="angular"),
         )
         yield from for_dtypes(
             "serial.sqeuclidean",
@@ -251,7 +251,7 @@ def yield_kernels(
             wrap_rows_batch_calls(spd.cosine),
             lambda A, B: spd.cdist(A, B, "cosine"),
             nk.angular,
-            lambda A, B: nk.cdist(A, B, metric="cosine"),
+            lambda A, B: nk.cdist(A, B, metric="angular"),
         )
         yield from for_dtypes(
             "scipy.cosine",
@@ -260,7 +260,7 @@ def yield_kernels(
             lambda A, B: raise_(NotImplementedError(f"Not implemented for bfloat16")),
             lambda A, B: raise_(NotImplementedError(f"Not implemented for bfloat16")),
             lambda A, B: nk.angular(A, B, "bfloat16"),
-            lambda A, B: nk.cdist(A, B, "bfloat16", metric="cosine"),
+            lambda A, B: nk.cdist(A, B, "bfloat16", metric="angular"),
         )
         yield from for_dtypes(
             "scipy.sqeuclidean",
@@ -318,7 +318,7 @@ def yield_kernels(
             lambda A, B: raise_(NotImplementedError("Not implemented for many-to-many")),
             skp.paired_cosine_distances,
             nk.angular,
-            lambda A, B: nk.cdist(A, B, metric="cosine"),
+            lambda A, B: nk.cdist(A, B, metric="angular"),
         )
         yield from for_dtypes(
             "sklearn.euclidean_distances",
@@ -652,7 +652,7 @@ def main():
         metavar="REGEX",
         default=utils.get_env("NUMWARS_FILTER"),
         help="Regex to filter which benchmarks to run (or set NUMWARS_FILTER env var). "
-             "Examples: --filter 'f32' (only f32 dtypes), --filter 'cosine|dot' (specific metrics)",
+             "Examples: --filter 'f32' (only f32 dtypes), --filter 'angular|dot' (specific metrics)",
     )
     parser.add_argument("--scipy", action="store_true", help="Profile SciPy, must be installed")
     parser.add_argument("--scikit", action="store_true", help="Profile scikit-learn, must be installed")

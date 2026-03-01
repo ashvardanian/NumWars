@@ -276,7 +276,7 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
         metavar="REGEX",
         default=get_env("NUMWARS_FILTER"),
         help="Regex to select which benchmarks to run (or set NUMWARS_FILTER env var). "
-             "Examples: --filter 'f32' (only f32), --filter 'cosine|dot' (specific metrics)",
+             "Examples: --filter 'f32' (only f32), --filter 'angular|dot' (specific metrics)",
     )
     parser.add_argument(
         "--warmup",
@@ -307,13 +307,13 @@ def should_run_benchmark(name: str, filter_pattern: Optional[re.Pattern] = None)
     specific benchmarks via regex matching on the full benchmark name.
 
     Example benchmark names:
-    - "similarity/cosine/f32"
+    - "similarity/angular/f32"
     - "each/add/f64"
     - "dots/numkong/f32/1024x1024x1024/8t"
 
     Example filters:
     - NUMWARS_FILTER="f32" → only f32 benchmarks
-    - NUMWARS_FILTER="cosine|dot" → only cosine and dot metrics
+    - NUMWARS_FILTER="angular|dot" → only angular and dot metrics
     - NUMWARS_FILTER="each/add" → only add operations in each module
 
     Args:

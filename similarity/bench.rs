@@ -1,7 +1,7 @@
 //! Benchmark for vector similarity operations
 //!
 //! Compares NumKong vs baseline Rust implementations for pairwise similarity metrics.
-//! Benchmarks spatial (dot, cosine, L2), binary (hamming, jaccard), and probability
+//! Benchmarks spatial (dot, angular, sqeuclidean), binary (hamming, jaccard), and probability
 //! (Jensen-Shannon, Kullback-Leibler) distances.
 //!
 //! Run with:
@@ -14,8 +14,8 @@
 //!
 //! # Filter to specific benchmarks via regex
 //! NUMWARS_FILTER="f32" cargo bench --features bench_similarity  # Only f32 dtypes
-//! NUMWARS_FILTER="cosine|dot" cargo bench --features bench_similarity  # Only cosine and dot
-//! NUMWARS_FILTER="similarity/cosine/f32" cargo bench --features bench_similarity  # Specific benchmark
+//! NUMWARS_FILTER="angular|dot" cargo bench --features bench_similarity  # Only angular and dot
+//! NUMWARS_FILTER="similarity/angular/f32" cargo bench --features bench_similarity  # Specific benchmark
 //! ```
 //!
 //! Environment variables:
@@ -26,7 +26,7 @@
 //! - NUMWARS_PROFILE_SECONDS: Measurement time in seconds (default: 10.0)
 //!
 //! Benchmark naming: similarity/{metric}/{dtype}
-//! Examples: similarity/cosine/f32, similarity/dot/f64, similarity/l2sq/i8
+//! Examples: similarity/angular/f32, similarity/dot/f64, similarity/sqeuclidean/i8
 
 #![allow(unused)]
 
@@ -46,8 +46,8 @@ use utils::*;
 
 // region: Baseline Implementations
 
-/// Baseline cosine distance with 8-way unrolling
-pub fn baseline_cos_unrolled<T, Acc>(a: &[T], b: &[T]) -> Option<f32>
+/// Baseline angular distance with 8-way unrolling
+pub fn baseline_angular_unrolled<T, Acc>(a: &[T], b: &[T]) -> Option<f32>
 where
     T: Num + Copy + NumCast + AsPrimitive<f32>,
     Acc: Num + Copy + NumCast + AddAssign + 'static,
@@ -154,7 +154,7 @@ where
 }
 
 /// Baseline squared Euclidean distance with 8-way unrolling
-pub fn baseline_l2sq_unrolled<T, Acc>(a: &[T], b: &[T]) -> Option<f32>
+pub fn baseline_sqeuclidean_unrolled<T, Acc>(a: &[T], b: &[T]) -> Option<f32>
 where
     T: Num + Copy + NumCast,
     Acc: Num + Copy + NumCast + AddAssign + 'static,
@@ -306,15 +306,15 @@ where
 
 // region: Benchmarks
 
-/// Benchmark squared Euclidean distance (L2^2)
-pub fn bench_l2sq(c: &mut Criterion) {
+/// Benchmark squared Euclidean distance
+pub fn bench_sqeuclidean(c: &mut Criterion) {
     let dims = get_vector_dims();
     let mut rng = rand::thread_rng();
 
-    let mut group = c.benchmark_group("similarity/l2sq");
+    let mut group = c.benchmark_group("similarity/sqeuclidean");
 
     // f32
-    if should_run_benchmark("similarity/l2sq/f32") {
+    if should_run_benchmark("similarity/sqeuclidean/f32") {
         let a = generate_random_f32(&mut rng, dims);
         let b = generate_random_f32(&mut rng, dims);
         group.throughput(Throughput::Bytes(
@@ -326,12 +326,12 @@ pub fn bench_l2sq(c: &mut Criterion) {
         });
 
         group.bench_function("baseline_f32", |bench| {
-            bench.iter(|| black_box(baseline_l2sq_unrolled::<f32, f32>(&a, &b)))
+            bench.iter(|| black_box(baseline_sqeuclidean_unrolled::<f32, f32>(&a, &b)))
         });
     }
 
     // f64
-    if should_run_benchmark("similarity/l2sq/f64") {
+    if should_run_benchmark("similarity/sqeuclidean/f64") {
         let a = generate_random_f64(&mut rng, dims);
         let b = generate_random_f64(&mut rng, dims);
         group.throughput(Throughput::Bytes(
@@ -343,12 +343,12 @@ pub fn bench_l2sq(c: &mut Criterion) {
         });
 
         group.bench_function("baseline_f64", |bench| {
-            bench.iter(|| black_box(baseline_l2sq_unrolled::<f64, f64>(&a, &b)))
+            bench.iter(|| black_box(baseline_sqeuclidean_unrolled::<f64, f64>(&a, &b)))
         });
     }
 
     // i8
-    if should_run_benchmark("similarity/l2sq/i8") {
+    if should_run_benchmark("similarity/sqeuclidean/i8") {
         let a = generate_random_i8(&mut rng, dims);
         let b = generate_random_i8(&mut rng, dims);
         group.throughput(Throughput::Bytes((dims * std::mem::size_of::<i8>()) as u64));
@@ -358,22 +358,22 @@ pub fn bench_l2sq(c: &mut Criterion) {
         });
 
         group.bench_function("baseline_i8", |bench| {
-            bench.iter(|| black_box(baseline_l2sq_unrolled::<i8, i32>(&a, &b)))
+            bench.iter(|| black_box(baseline_sqeuclidean_unrolled::<i8, i32>(&a, &b)))
         });
     }
 
     group.finish();
 }
 
-/// Benchmark cosine distance
-pub fn bench_cosine(c: &mut Criterion) {
+/// Benchmark angular distance
+pub fn bench_angular(c: &mut Criterion) {
     let dims = get_vector_dims();
     let mut rng = rand::thread_rng();
 
-    let mut group = c.benchmark_group("similarity/cosine");
+    let mut group = c.benchmark_group("similarity/angular");
 
     // f32
-    if should_run_benchmark("similarity/cosine/f32") {
+    if should_run_benchmark("similarity/angular/f32") {
         let a = generate_random_f32(&mut rng, dims);
         let b = generate_random_f32(&mut rng, dims);
         group.throughput(Throughput::Bytes(
@@ -381,16 +381,16 @@ pub fn bench_cosine(c: &mut Criterion) {
         ));
 
         group.bench_function("numkong_f32", |bench| {
-            bench.iter(|| black_box(NumKongSpatial::cosine(&a, &b)))
+            bench.iter(|| black_box(NumKongSpatial::angular(&a, &b)))
         });
 
         group.bench_function("baseline_f32", |bench| {
-            bench.iter(|| black_box(baseline_cos_unrolled::<f32, f32>(&a, &b)))
+            bench.iter(|| black_box(baseline_angular_unrolled::<f32, f32>(&a, &b)))
         });
     }
 
     // f64
-    if should_run_benchmark("similarity/cosine/f64") {
+    if should_run_benchmark("similarity/angular/f64") {
         let a = generate_random_f64(&mut rng, dims);
         let b = generate_random_f64(&mut rng, dims);
         group.throughput(Throughput::Bytes(
@@ -398,26 +398,26 @@ pub fn bench_cosine(c: &mut Criterion) {
         ));
 
         group.bench_function("numkong_f64", |bench| {
-            bench.iter(|| black_box(NumKongSpatial::cosine(&a, &b)))
+            bench.iter(|| black_box(NumKongSpatial::angular(&a, &b)))
         });
 
         group.bench_function("baseline_f64", |bench| {
-            bench.iter(|| black_box(baseline_cos_unrolled::<f64, f64>(&a, &b)))
+            bench.iter(|| black_box(baseline_angular_unrolled::<f64, f64>(&a, &b)))
         });
     }
 
     // i8
-    if should_run_benchmark("similarity/cosine/i8") {
+    if should_run_benchmark("similarity/angular/i8") {
         let a = generate_random_i8(&mut rng, dims);
         let b = generate_random_i8(&mut rng, dims);
         group.throughput(Throughput::Bytes((dims * std::mem::size_of::<i8>()) as u64));
 
         group.bench_function("numkong_i8", |bench| {
-            bench.iter(|| black_box(NumKongSpatial::cosine(&a, &b)))
+            bench.iter(|| black_box(NumKongSpatial::angular(&a, &b)))
         });
 
         group.bench_function("baseline_i8", |bench| {
-            bench.iter(|| black_box(baseline_cos_unrolled::<i8, i32>(&a, &b)))
+            bench.iter(|| black_box(baseline_angular_unrolled::<i8, i32>(&a, &b)))
         });
     }
 
@@ -486,12 +486,12 @@ mod tests {
     }
 
     #[test]
-    fn test_l2sq_baseline_correctness() {
+    fn test_sqeuclidean_baseline_correctness() {
         let a = vec![0.0f32, 0.0];
         let b = vec![3.0f32, 4.0];
 
         // Use the unrolled baseline from this module
-        let result_sq = baseline_l2sq_unrolled::<f32, f32>(&a, &b);
+        let result_sq = baseline_sqeuclidean_unrolled::<f32, f32>(&a, &b);
         assert!(result_sq.is_some());
         let result = result_sq.unwrap().sqrt();
         assert!((result - 5.0).abs() < 1e-6); // sqrt(3^2 + 4^2) = 5
@@ -505,7 +505,7 @@ mod tests {
 criterion_group! {
     name = benches;
     config = utils::configure_criterion();
-    targets = bench_dot, bench_cosine, bench_l2sq
+    targets = bench_dot, bench_angular, bench_sqeuclidean
 }
 criterion_main!(benches);
 

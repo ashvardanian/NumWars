@@ -17,9 +17,9 @@ This module benchmarks __pairwise vector operations__ that take two vectors and 
 Metrics for continuous vector data:
 
 - __Dot Product__: Inner product of two vectors
-- __Cosine Distance__: 1 - (cosine similarity between vectors)
-- __L2 (Euclidean) Distance__: √(Σ(aᵢ - bᵢ)²)
-- __L2² (Squared Euclidean)__: Σ(aᵢ - bᵢ)²
+- __Angular Distance__: 1 - (cosine similarity between vectors)
+- __Euclidean Distance__: √(Σ(aᵢ - bᵢ)²)
+- __Squared Euclidean (sqeuclidean)__: Σ(aᵢ - bᵢ)²
 
 __Supported types__: f64, f32, f16, bf16, i8
 
@@ -59,7 +59,7 @@ NUMWARS_DTYPE=f32,f64 cargo bench --features bench_similarity
 NUMWARS_DIMS=512 cargo bench --features bench_similarity
 
 # Filter by name pattern
-NUMWARS_FILTER=cosine cargo bench --features bench_similarity
+NUMWARS_FILTER=angular cargo bench --features bench_similarity
 ```
 
 ### Python Benchmarks
@@ -132,12 +132,12 @@ For batch benchmarks with batch_size=1000 and dims=1536:
 
 Results will be added here after running benchmarks. Example format:
 
-| Metric  | DType | NumKong (GB/s) | Baseline (GB/s) | Speedup |
-| ------- | ----- | -------------: | --------------: | ------: |
-| dot     | f32   |           45.2 |            23.1 |   1.96× |
-| cosine  | f32   |           42.8 |            19.5 |   2.19× |
-| l2sq    | f32   |           48.1 |            24.3 |   1.98× |
-| hamming | u8    |           38.7 |            15.2 |   2.55× |
+| Metric      | DType | NumKong (GB/s) | Baseline (GB/s) | Speedup |
+| ----------- | ----- | -------------: | --------------: | ------: |
+| dot         | f32   |           45.2 |            23.1 |   1.96× |
+| angular     | f32   |           42.8 |            19.5 |   2.19× |
+| sqeuclidean | f32   |           48.1 |            24.3 |   1.98× |
+| hamming     | u8    |           38.7 |            15.2 |   2.55× |
 
 ## Competitors
 
@@ -149,7 +149,7 @@ Results will be added here after running benchmarks. Example format:
 ### Python
 
 - __NumPy__: Vectorized operations with OpenBLAS/MKL backend
-- __SciPy__: `spatial.distance` module (cosine, sqeuclidean, hamming, jaccard, jensenshannon)
+- __SciPy__: `spatial.distance` module (angular, sqeuclidean, hamming, jaccard, jensenshannon)
 - __scikit-learn__: `metrics.pairwise` distances
 - __PyTorch__ (optional): GPU-capable tensor operations
 - __JAX__ (optional): JIT-compiled XLA backend

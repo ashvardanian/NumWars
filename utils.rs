@@ -13,7 +13,11 @@ use criterion::Criterion;
 use rand::Rng;
 
 // NumKong types for alternative float representations
-#[cfg(any(feature = "bench_similarity", feature = "bench_each", feature = "bench_dots"))]
+#[cfg(any(
+    feature = "bench_similarity",
+    feature = "bench_each",
+    feature = "bench_dots"
+))]
 use numkong::{bf16, e4m3, e5m2, f16};
 
 // region: Environment Variable Helpers
@@ -653,13 +657,13 @@ pub fn get_thread_count() -> usize {
 /// specific benchmarks via regex matching on the full benchmark name.
 ///
 /// Example benchmark names:
-/// - "similarity/cosine/f32"
+/// - "similarity/angular/f32"
 /// - "each/add/f64"
 /// - "dots/numkong/f32/1024x1024x1024/8t"
 ///
 /// Example filters:
 /// - NUMWARS_FILTER="f32" → only f32 benchmarks
-/// - NUMWARS_FILTER="cosine|dot" → only cosine and dot metrics
+/// - NUMWARS_FILTER="angular|dot" → only angular and dot metrics
 /// - NUMWARS_FILTER="each/add" → only add operations in each module
 #[allow(dead_code)]
 pub fn should_run_benchmark(name: &str) -> bool {
@@ -706,7 +710,6 @@ pub fn configure_criterion() -> Criterion {
 
 // endregion
 
-
 // region: Testing Utilities
 
 #[cfg(test)]
@@ -725,7 +728,6 @@ mod tests {
         assert_eq!(format_bytes(1024 * 1024), "1.00 MB");
         assert_eq!(format_bytes(1024 * 1024 * 1024), "1.00 GB");
     }
-
 }
 
 // endregion

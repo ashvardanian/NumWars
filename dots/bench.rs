@@ -220,9 +220,7 @@ fn bench_ndarray_f32(c: &mut Criterion) {
     group.throughput(Throughput::Elements(ops));
 
     group.bench_function("ndarray", |bench| {
-        bench.iter(|| {
-            black_box(a.dot(&b.t()))
-        });
+        bench.iter(|| black_box(a.dot(&b.t())));
     });
 
     group.finish();
@@ -252,9 +250,7 @@ fn bench_ndarray_f64(c: &mut Criterion) {
     group.throughput(Throughput::Elements(ops));
 
     group.bench_function("ndarray", |bench| {
-        bench.iter(|| {
-            black_box(a.dot(&b.t()))
-        });
+        bench.iter(|| black_box(a.dot(&b.t())));
     });
 
     group.finish();
@@ -285,9 +281,7 @@ fn bench_ndarray_bf16(c: &mut Criterion) {
     group.throughput(Throughput::Elements(ops));
 
     group.bench_function("ndarray", |bench| {
-        bench.iter(|| {
-            black_box(a.dot(&b.t()))
-        });
+        bench.iter(|| black_box(a.dot(&b.t())));
     });
 
     group.finish();
@@ -317,9 +311,7 @@ fn bench_ndarray_i8(c: &mut Criterion) {
     group.throughput(Throughput::Elements(ops));
 
     group.bench_function("ndarray", |bench| {
-        bench.iter(|| {
-            black_box(a.dot(&b.t()))
-        });
+        bench.iter(|| black_box(a.dot(&b.t())));
     });
 
     group.finish();
@@ -353,9 +345,7 @@ fn bench_nalgebra_f32(c: &mut Criterion) {
     group.throughput(Throughput::Elements(ops));
 
     group.bench_function("nalgebra", |bench| {
-        bench.iter(|| {
-            black_box(&a * b.transpose())
-        });
+        bench.iter(|| black_box(&a * b.transpose()));
     });
 
     group.finish();
@@ -385,9 +375,7 @@ fn bench_nalgebra_f64(c: &mut Criterion) {
     group.throughput(Throughput::Elements(ops));
 
     group.bench_function("nalgebra", |bench| {
-        bench.iter(|| {
-            black_box(&a * b.transpose())
-        });
+        bench.iter(|| black_box(&a * b.transpose()));
     });
 
     group.finish();
@@ -418,9 +406,7 @@ fn bench_nalgebra_bf16(c: &mut Criterion) {
     group.throughput(Throughput::Elements(ops));
 
     group.bench_function("nalgebra", |bench| {
-        bench.iter(|| {
-            black_box(&a * b.transpose())
-        });
+        bench.iter(|| black_box(&a * b.transpose()));
     });
 
     group.finish();
@@ -450,9 +436,7 @@ fn bench_nalgebra_i8(c: &mut Criterion) {
     group.throughput(Throughput::Elements(ops));
 
     group.bench_function("nalgebra", |bench| {
-        bench.iter(|| {
-            black_box(&a * b.transpose())
-        });
+        bench.iter(|| black_box(&a * b.transpose()));
     });
 
     group.finish();
