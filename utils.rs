@@ -3,22 +3,28 @@ use std::fmt;
 use std::panic;
 use std::str::FromStr;
 
-#[cfg(feature = "bench_similarity")]
+#[cfg(any(
+    feature = "bench_similarity",
+    feature = "bench_each",
+    feature = "bench_dots",
+    feature = "bench_geospatial",
+    feature = "bench_similarities",
+    feature = "bench_maxsim",
+    feature = "bench_reduce",
+    feature = "bench_mesh"
+))]
 use criterion::Criterion;
 #[cfg(any(
     feature = "bench_similarity",
     feature = "bench_each",
-    feature = "bench_dots"
+    feature = "bench_dots",
+    feature = "bench_geospatial",
+    feature = "bench_similarities",
+    feature = "bench_maxsim",
+    feature = "bench_reduce",
+    feature = "bench_mesh"
 ))]
 use rand::Rng;
-
-// NumKong types for alternative float representations
-#[cfg(any(
-    feature = "bench_similarity",
-    feature = "bench_each",
-    feature = "bench_dots"
-))]
-use numkong::{bf16, e4m3, e5m2, f16};
 
 // region: Environment Variable Helpers
 //
@@ -41,10 +47,7 @@ pub fn get_env_or_default(name: &str, default: &str) -> String {
 /// Returns the default if the variable is not set or cannot be parsed.
 #[allow(dead_code)]
 pub fn get_env_parsed<T: FromStr>(name: &str, default: T) -> T {
-    env::var(name)
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default)
+    env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
 }
 
 /// Get an optional environment variable parsed to a type.
@@ -187,6 +190,63 @@ impl std::error::Error for BenchmarkError {}
 
 // endregion
 
+// region: Baseline Conversion
+
+/// Trait for converting element types to accumulator types in baselines.
+/// Replaces `NumCast` for types (like mini-floats) that can't implement it.
+#[allow(dead_code)]
+pub trait BaselineConvert<Acc>: Copy {
+    fn to_acc(self) -> Acc;
+}
+
+impl BaselineConvert<f32> for f32 {
+    fn to_acc(self) -> f32 {
+        self
+    }
+}
+impl BaselineConvert<f64> for f64 {
+    fn to_acc(self) -> f64 {
+        self
+    }
+}
+impl BaselineConvert<i32> for i8 {
+    fn to_acc(self) -> i32 {
+        self as i32
+    }
+}
+impl BaselineConvert<f32> for numkong::f16 {
+    fn to_acc(self) -> f32 {
+        self.to_f32()
+    }
+}
+impl BaselineConvert<f32> for numkong::bf16 {
+    fn to_acc(self) -> f32 {
+        self.to_f32()
+    }
+}
+impl BaselineConvert<f32> for numkong::e4m3 {
+    fn to_acc(self) -> f32 {
+        self.to_f32()
+    }
+}
+impl BaselineConvert<f32> for numkong::e5m2 {
+    fn to_acc(self) -> f32 {
+        self.to_f32()
+    }
+}
+impl BaselineConvert<f32> for numkong::e2m3 {
+    fn to_acc(self) -> f32 {
+        self.to_f32()
+    }
+}
+impl BaselineConvert<f32> for numkong::e3m2 {
+    fn to_acc(self) -> f32 {
+        self.to_f32()
+    }
+}
+
+// endregion
+
 // region: Data Generation
 
 /// Generic random number generation for numeric types.
@@ -203,134 +263,21 @@ impl std::error::Error for BenchmarkError {}
 #[cfg(any(
     feature = "bench_similarity",
     feature = "bench_each",
-    feature = "bench_dots"
+    feature = "bench_dots",
+    feature = "bench_geospatial",
+    feature = "bench_similarities",
+    feature = "bench_maxsim",
+    feature = "bench_reduce",
+    feature = "bench_mesh"
 ))]
 #[allow(dead_code)]
-pub fn fill_random<T, R: Rng>(rng: &mut R, data: &mut [T])
-where
-    T: RandomFillable,
-{
-    T::fill_random(rng, data);
-}
-
-/// Trait for types that can be randomly generated.
-#[cfg(any(
-    feature = "bench_similarity",
-    feature = "bench_each",
-    feature = "bench_dots"
-))]
-pub trait RandomFillable: Sized {
-    fn fill_random<R: Rng>(rng: &mut R, data: &mut [Self]);
-}
-
-// Implementation for f32 - base case
-#[cfg(any(
-    feature = "bench_similarity",
-    feature = "bench_each",
-    feature = "bench_dots"
-))]
-impl RandomFillable for f32 {
-    fn fill_random<R: Rng>(rng: &mut R, data: &mut [Self]) {
-        for val in data.iter_mut() {
-            *val = rng.gen_range(-1.0..1.0);
-        }
-    }
-}
-
-// Implementation for f64 - base case
-#[cfg(any(
-    feature = "bench_similarity",
-    feature = "bench_each",
-    feature = "bench_dots"
-))]
-impl RandomFillable for f64 {
-    fn fill_random<R: Rng>(rng: &mut R, data: &mut [Self]) {
-        for val in data.iter_mut() {
-            *val = rng.gen_range(-1.0..1.0);
-        }
-    }
-}
-
-// Implementation for i8 - full range
-#[cfg(any(
-    feature = "bench_similarity",
-    feature = "bench_each",
-    feature = "bench_dots"
-))]
-impl RandomFillable for i8 {
-    fn fill_random<R: Rng>(rng: &mut R, data: &mut [Self]) {
-        for val in data.iter_mut() {
-            *val = rng.gen();
-        }
-    }
-}
-
-// Implementation for u8 - full range
-#[cfg(any(
-    feature = "bench_similarity",
-    feature = "bench_each",
-    feature = "bench_dots"
-))]
-impl RandomFillable for u8 {
-    fn fill_random<R: Rng>(rng: &mut R, data: &mut [Self]) {
-        for val in data.iter_mut() {
-            *val = rng.gen();
-        }
-    }
-}
-
-// Implementation for NumKong f16 - via f32
-#[cfg(any(
-    feature = "bench_similarity",
-    feature = "bench_each",
-    feature = "bench_dots"
-))]
-impl RandomFillable for f16 {
-    fn fill_random<R: Rng>(rng: &mut R, data: &mut [Self]) {
-        for val in data.iter_mut() {
-            *val = f16::from_f32(rng.gen_range(-1.0..1.0));
-        }
-    }
-}
-
-// Implementation for NumKong bf16 - via f32
-#[cfg(any(
-    feature = "bench_similarity",
-    feature = "bench_each",
-    feature = "bench_dots"
-))]
-impl RandomFillable for bf16 {
-    fn fill_random<R: Rng>(rng: &mut R, data: &mut [Self]) {
-        for val in data.iter_mut() {
-            *val = bf16::from_f32(rng.gen_range(-1.0..1.0));
-        }
-    }
-}
-
-// Implementation for NumKong e4m3 - via f32
-#[cfg(any(
-    feature = "bench_similarity",
-    feature = "bench_each",
-    feature = "bench_dots"
-))]
-impl RandomFillable for e4m3 {
-    fn fill_random<R: Rng>(rng: &mut R, data: &mut [Self]) {
-        for val in data.iter_mut() {
-            *val = e4m3::from_f32(rng.gen_range(-1.0..1.0));
-        }
-    }
-}
-
-// Implementation for NumKong e5m2 - via f32
-#[cfg(any(
-    feature = "bench_similarity",
-    feature = "bench_each",
-    feature = "bench_dots"
-))]
-impl RandomFillable for e5m2 {
-    fn fill_random<R: Rng>(rng: &mut R, data: &mut [Self]) {
-        for val in data.iter_mut() {
-            *val = e5m2::from_f32(rng.gen_range(-1.0..1.0));
+pub fn fill_random<T, R: Rng>(rng: &mut R, data: &mut [T]) {
+    let byte_len = data.len() * std::mem::size_of::<T>();
+    if byte_len > 0 {
+        // SAFETY: Any bit pattern is acceptable for throughput benchmarks.
+        // The byte slice covers exactly the memory of `data`.
+        unsafe {
+            rng.fill_bytes(std::slice::from_raw_parts_mut(data.as_mut_ptr() as *mut u8, byte_len));
         }
     }
 }
@@ -349,117 +296,34 @@ impl RandomFillable for e5m2 {
 #[cfg(any(
     feature = "bench_similarity",
     feature = "bench_each",
-    feature = "bench_dots"
+    feature = "bench_dots",
+    feature = "bench_geospatial",
+    feature = "bench_similarities",
+    feature = "bench_maxsim",
+    feature = "bench_reduce",
+    feature = "bench_mesh"
 ))]
 #[allow(dead_code)]
-pub fn fill_random_distribution<T, R: Rng>(rng: &mut R, data: &mut [T])
-where
-    T: DistributionFillable,
-{
-    T::fill_distribution(rng, data);
+pub fn fill_random_distribution<T, R: Rng>(rng: &mut R, data: &mut [T]) {
+    fill_random(rng, data);
 }
 
-/// Trait for types that support probability distribution generation.
+/// Allocate a `Vec<T>` of `count` elements filled with random bytes.
 #[cfg(any(
     feature = "bench_similarity",
     feature = "bench_each",
-    feature = "bench_dots"
-))]
-pub trait DistributionFillable: Sized {
-    fn fill_distribution<R: Rng>(rng: &mut R, data: &mut [Self]);
-}
-
-// Implementation for f32
-#[cfg(any(
-    feature = "bench_similarity",
-    feature = "bench_each",
-    feature = "bench_dots"
-))]
-impl DistributionFillable for f32 {
-    fn fill_distribution<R: Rng>(rng: &mut R, data: &mut [Self]) {
-        // Fill with random values in [0.01, 1.0]
-        for val in data.iter_mut() {
-            *val = rng.gen_range(0.01..1.0);
-        }
-        // Normalize to sum = 1.0
-        let sum: f32 = data.iter().sum();
-        for val in data.iter_mut() {
-            *val /= sum;
-        }
-    }
-}
-
-// Implementation for f64
-#[cfg(any(
-    feature = "bench_similarity",
-    feature = "bench_each",
-    feature = "bench_dots"
-))]
-impl DistributionFillable for f64 {
-    fn fill_distribution<R: Rng>(rng: &mut R, data: &mut [Self]) {
-        // Fill with random values in [0.01, 1.0]
-        for val in data.iter_mut() {
-            *val = rng.gen_range(0.01..1.0);
-        }
-        // Normalize to sum = 1.0
-        let sum: f64 = data.iter().sum();
-        for val in data.iter_mut() {
-            *val /= sum;
-        }
-    }
-}
-
-// Backward compatibility wrappers for existing code
-// These will be removed after updating all benchmarks to use fill_random
-
-/// Generate random f32 values in the range [-1.0, 1.0].
-#[cfg(any(
-    feature = "bench_similarity",
-    feature = "bench_each",
-    feature = "bench_dots"
+    feature = "bench_dots",
+    feature = "bench_geospatial",
+    feature = "bench_similarities",
+    feature = "bench_maxsim",
+    feature = "bench_reduce",
+    feature = "bench_mesh"
 ))]
 #[allow(dead_code)]
-pub fn generate_random_f32<R: Rng>(rng: &mut R, count: usize) -> Vec<f32> {
-    let mut data = vec![0.0f32; count];
-    fill_random(rng, &mut data);
-    data
-}
-
-/// Generate random f64 values in the range [-1.0, 1.0].
-#[cfg(any(
-    feature = "bench_similarity",
-    feature = "bench_each",
-    feature = "bench_dots"
-))]
-#[allow(dead_code)]
-pub fn generate_random_f64<R: Rng>(rng: &mut R, count: usize) -> Vec<f64> {
-    let mut data = vec![0.0f64; count];
-    fill_random(rng, &mut data);
-    data
-}
-
-/// Generate random i8 values in the full range.
-#[cfg(any(
-    feature = "bench_similarity",
-    feature = "bench_each",
-    feature = "bench_dots"
-))]
-#[allow(dead_code)]
-pub fn generate_random_i8<R: Rng>(rng: &mut R, count: usize) -> Vec<i8> {
-    let mut data = vec![0i8; count];
-    fill_random(rng, &mut data);
-    data
-}
-
-/// Generate random u8 values (useful for binary similarity).
-#[cfg(any(
-    feature = "bench_similarity",
-    feature = "bench_each",
-    feature = "bench_dots"
-))]
-#[allow(dead_code)]
-pub fn generate_random_u8<R: Rng>(rng: &mut R, count: usize) -> Vec<u8> {
-    let mut data = vec![0u8; count];
+pub fn generate_random<T>(rng: &mut impl Rng, count: usize) -> Vec<T> {
+    let mut data = Vec::<T>::with_capacity(count);
+    // SAFETY: fill_random writes every byte before any read can occur.
+    unsafe { data.set_len(count) };
     fill_random(rng, &mut data);
     data
 }
@@ -541,11 +405,7 @@ pub fn calculate_error_f64(expected: f64, actual: f64) -> (f64, f64) {
 #[allow(dead_code)]
 pub fn mean_absolute_error_f32(expected: &[f32], actual: &[f32]) -> f32 {
     assert_eq!(expected.len(), actual.len());
-    let sum: f32 = expected
-        .iter()
-        .zip(actual.iter())
-        .map(|(e, a)| (e - a).abs())
-        .sum();
+    let sum: f32 = expected.iter().zip(actual.iter()).map(|(e, a)| (e - a).abs()).sum();
     sum / expected.len() as f32
 }
 
@@ -553,11 +413,7 @@ pub fn mean_absolute_error_f32(expected: &[f32], actual: &[f32]) -> f32 {
 #[allow(dead_code)]
 pub fn mean_absolute_error_f64(expected: &[f64], actual: &[f64]) -> f64 {
     assert_eq!(expected.len(), actual.len());
-    let sum: f64 = expected
-        .iter()
-        .zip(actual.iter())
-        .map(|(e, a)| (e - a).abs())
-        .sum();
+    let sum: f64 = expected.iter().zip(actual.iter()).map(|(e, a)| (e - a).abs()).sum();
     sum / expected.len() as f64
 }
 
@@ -690,7 +546,12 @@ pub fn should_run_benchmark(name: &str) -> bool {
 #[cfg(any(
     feature = "bench_similarity",
     feature = "bench_each",
-    feature = "bench_dots"
+    feature = "bench_dots",
+    feature = "bench_geospatial",
+    feature = "bench_similarities",
+    feature = "bench_maxsim",
+    feature = "bench_reduce",
+    feature = "bench_mesh"
 ))]
 #[allow(dead_code)]
 pub fn configure_criterion() -> Criterion {
@@ -717,13 +578,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_calculate_throughput() {
+    fn throughput_1gb_in_1s() {
         let throughput = calculate_throughput(1_000_000_000, 1.0);
         assert!((throughput - 1.0).abs() < 1e-6);
     }
 
     #[test]
-    fn test_format_bytes() {
+    fn bytes_formatting_scales() {
         assert_eq!(format_bytes(1024), "1.00 KB");
         assert_eq!(format_bytes(1024 * 1024), "1.00 MB");
         assert_eq!(format_bytes(1024 * 1024 * 1024), "1.00 GB");

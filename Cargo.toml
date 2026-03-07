@@ -20,16 +20,25 @@ rand = {version = "0.10", optional = true}
 regex = "1.11"
 
 # Competitors (all optional)
+argminmax = {version = "0.6", optional = true, default-features = false, features = ["float"]}
 faer = {version = "0.24", optional = true}
-fork_union = {version = "2.3", optional = true}
+geo = {version = "0.32", optional = true}
+matrixmultiply = {version = "0.3", optional = true}
 nalgebra = {version = "0.34", optional = true}
 ndarray = {version = "0.17", optional = true}
+polars = {version = "0.53", optional = true, default-features = false, features = ["lazy"]}
+wide = {version = "1.1", optional = true}
 
 [features]
-all = ["bench_similarity", "bench_each", "bench_dots"]
-bench_dots = ["rand", "fork_union", "ndarray", "nalgebra", "faer", "half"]
-bench_each = ["rand", "num-traits", "half"]
-bench_similarity = ["rand", "num-traits", "half"]
+all = ["bench_similarity", "bench_each", "bench_dots", "bench_geospatial", "bench_similarities", "bench_maxsim", "bench_reduce", "bench_mesh"]
+bench_dots = ["rand", "ndarray", "nalgebra", "faer", "half", "matrixmultiply", "num-traits"]
+bench_each = ["rand", "num-traits", "half", "ndarray", "wide", "nalgebra"]
+bench_geospatial = ["rand", "num-traits", "geo"]
+bench_maxsim = ["rand", "num-traits", "half", "ndarray", "nalgebra"]
+bench_mesh = ["rand", "num-traits", "half", "nalgebra"]
+bench_reduce = ["rand", "num-traits", "ndarray", "polars", "argminmax"]
+bench_similarities = ["rand", "half", "num-traits", "ndarray", "nalgebra"]
+bench_similarity = ["rand", "num-traits", "half", "ndarray", "nalgebra"]
 default = []
 
 [[bench]]
@@ -49,6 +58,36 @@ harness = false
 name = "bench_dots"
 path = "dots/bench.rs"
 required-features = ["bench_dots"]
+
+[[bench]]
+harness = false
+name = "bench_geospatial"
+path = "geospatial/bench.rs"
+required-features = ["bench_geospatial"]
+
+[[bench]]
+harness = false
+name = "bench_similarities"
+path = "similarities/bench.rs"
+required-features = ["bench_similarities"]
+
+[[bench]]
+harness = false
+name = "bench_maxsim"
+path = "maxsim/bench.rs"
+required-features = ["bench_maxsim"]
+
+[[bench]]
+harness = false
+name = "bench_reduce"
+path = "reduce/bench.rs"
+required-features = ["bench_reduce"]
+
+[[bench]]
+harness = false
+name = "bench_mesh"
+path = "mesh/bench.rs"
+required-features = ["bench_mesh"]
 
 [profile.release]
 codegen-units = 1
