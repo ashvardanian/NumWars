@@ -1,25 +1,40 @@
 # Reduce Benchmarks
 
-Horizontal reduction and summary-statistics benchmarks comparing NumKong against Polars, ndarray, and scalar baselines.
+Horizontal sum and row-norm benchmarks comparing NumKong against Polars, ndarray, and scalar baselines.
 
 ## Rust
 
-| Library                 |      Precision      |      GB/s |
-| :---------------------- | :-----------------: | --------: |
-| `polars sum`            | _f32 → Option<f32>_ | __43.86__ |
-| `numkong moments().sum` |     _f32 → f64_     |     43.26 |
-| `ndarray sum`           |     _f32 → f32_     |     36.38 |
-| `scalar sum`            |     _f32 → f32_     |      6.67 |
+| Library                     | Precision    |      GB/s |
+| :-------------------------- | :----------- | --------: |
+| ___Sum___                   |              |           |
+| `polars::ChunkedArray::sum` | _f32 → f32_  | __43.86__ |
+| `numkong::reduce_moments`   | _f32 → f64_  |     43.26 |
+| `ndarray::sum`              | _f32 → f32_  |     36.38 |
+| serial code                 | _f32 → f32_  |      6.67 |
+| `numkong::reduce_moments`   | _f64 → f64_  |         ? |
+| `polars::ChunkedArray::sum` | _f64 → f64_  |         ? |
+| `ndarray::sum`              | _f64 → f64_  |         ? |
+| ___Row Norms___             |              |           |
+| `numkong::Dot`              | _f32 → f32_  |         ? |
+| serial code                 | _f32 → f32_  |         ? |
+| `ndarray::dot`              | _f32 → f32_  |         ? |
+| `numkong::Dot`              | _f64 → f64_  |         ? |
+| serial code                 | _f64 → f64_  |         ? |
+| `ndarray::dot`              | _f64 → f64_  |         ? |
+| `numkong::Dot`              | _bf16 → f32_ |         ? |
+| `numkong::Dot`              | _f16 → f32_  |         ? |
 
 ## Python
 
-| Library      | Operation |  Precision  |      GB/s |
-| :----------- | :-------: | :---------: | --------: |
-| `numpy sum`  |    sum    | _f64 → f64_ | __24.75__ |
-| `numpy sum`  |    sum    | _f32 → f32_ |     18.01 |
-| `numpy norm` |   norm    | _f64 → f64_ |      7.52 |
-| `numpy norm` |   norm    | _f32 → f64_ |      6.49 |
-| `numpy sum`  |    sum    |  _i8 → i8_  |      2.81 |
+| Library             | Precision   |      GB/s |
+| :------------------ | :---------- | --------: |
+| ___Sum___           |             |           |
+| `numpy.sum`         | _f64 → f64_ | __24.75__ |
+| `numpy.sum`         | _f32 → f32_ |     18.01 |
+| `numpy.sum`         | _i8 → i8_   |      2.81 |
+| ___Row Norms___     |             |           |
+| `numpy.linalg.norm` | _f64 → f64_ |      7.52 |
+| `numpy.linalg.norm` | _f32 → f64_ |      6.49 |
 
 ## Run It
 
@@ -34,7 +49,7 @@ NUMWARS_DIMS=10000 \
 cargo bench --bench bench_reduce --features bench_reduce
 
 # Focus on one operation
-NUMWARS_FILTER="reduce/minmax" \
+NUMWARS_FILTER="reduce/sum|reduce/row_norms" \
 cargo bench --bench bench_reduce --features bench_reduce
 ```
 

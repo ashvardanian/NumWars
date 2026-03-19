@@ -1,6 +1,6 @@
 # NumWars
 
-## Numerical Computing on CPUs, in Python & Rust
+## Mixed-Precision Numerics Benchmarks for Rust & Python
 
 ![NumWars banner](https://github.com/ashvardanian/ashvardanian/blob/master/repositories/NumWars-v1.png?raw=true)
 
@@ -36,24 +36,30 @@ The mainstream baselines shown here keep _f32 → f32_.
 Compared to Rust projects, it means:
 
 ```text
+NumKong:
 numkong::Tensor::dots_packed i8 → i32    ██████████████████████████████████ 1,357.36 GSO/s
 numkong::Tensor::dots_packed bf16 → f32  █████████████████▎                   684.96 GSO/s
 numkong::Tensor::dots_packed f16 → f32   ██▊                                  106.63 GSO/s
+numkong::Tensor::dots_packed f32 → f64   █                                     42.04 GSO/s
+
+Alternatives:
 faer::linalg::matmul::matmul f32 → f32   ██▏                                   81.21 GSO/s
 matrixmultiply::sgemm f32 → f32          █▉                                    78.61 GSO/s
 ndarray::ArrayBase::dot f32 → f32        █▉                                    78.55 GSO/s
 nalgebra::DMatrix × DMatrixᵀ f32 → f32   █▉                                    74.21 GSO/s
-numkong::Tensor::dots_packed f32 → f64   █                                     42.04 GSO/s
 ```
 
 Compared to Python:
 
 ```text
+NumKong:
 numkong.dots_packed i8 → i32    ███████████████████████████████████████████ 1,110.31 GSO/s
 numkong.dots_packed bf16 → f32  ██████████████████▊                           487.89 GSO/s
-numpy.matmul f32 → f32          █████▋                                        145.73 GSO/s
 numkong.dots_packed f16 → f32   ███▌                                           91.80 GSO/s
 numkong.dots_packed f32 → f64   █▋                                             42.69 GSO/s
+
+Alternatives:
+numpy.matmul f32 → f32          █████▋                                        145.73 GSO/s
 ```
 
 See [dots/README.md](dots/README.md) for details.
@@ -67,43 +73,41 @@ NumKong keeps its mixed-precision promotions, while the baseline libraries mostl
 Compared to Rust projects, it means:
 
 ```text
+NumKong:
 numkong::Dot::dot u8 → u32                ████████████████████████████████████ 54.28 GSO/s
 numkong::Dot::dot i8 → i32                ████████████████████████████▋        43.18 GSO/s
 numkong::Euclidean::euclidean u8 → f32    ███████████████████████████          40.83 GSO/s
 numkong::Euclidean::euclidean i8 → f32    ██████████████████████▊              34.10 GSO/s
 numkong::Dot::dot bf16 → f32              █████████████▎                       20.09 GSO/s
-scalar dot loop f32 → f32                 █████████▌                           14.25 GSO/s
 numkong::Euclidean::euclidean bf16 → f32  ████████▍                            12.65 GSO/s
-ndarray::ArrayBase::dot f32 → f32         █████▏                                7.75 GSO/s
-nalgebra::Matrix::dot f32 → f32           █████                                 7.56 GSO/s
-scalar dot loop u8 → u32                  ████▊                                 7.20 GSO/s
 numkong::Dot::dot f32 → f64               ████                                  6.12 GSO/s
 numkong::Euclidean::euclidean f32 → f64   ███▋                                  5.53 GSO/s
+
+Alternatives:
+ndarray::ArrayBase::dot f32 → f32         █████▏                                7.75 GSO/s
+nalgebra::Matrix::dot f32 → f32           █████                                 7.56 GSO/s
 ndarray sqrt((a - b)·(a - b)) f32 → f32   ███▏                                  4.75 GSO/s
-scalar dot loop i8 → i32                  ███▏                                  4.73 GSO/s
 nalgebra (a - b).norm() f32 → f32         ███▏                                  4.63 GSO/s
-scalar euclidean loop f32 → f32           █▏                                    1.62 GSO/s
-scalar euclidean loop u8 → f32            ▋                                     1.18 GSO/s
-scalar euclidean loop i8 → f32            ▋                                     1.17 GSO/s
-scalar euclidean loop bf16 → f32                                                0.16 GSO/s
-scalar dot loop bf16 → f32                                                      0.16 GSO/s
 ```
 
 Compared to Python:
 
 ```text
+NumKong:
 numkong.euclidean u8 → f32                  ███████████████████████████████████ 5.65 GSO/s
 numkong.euclidean i8 → f32                  ███████████████████████████████▌    5.08 GSO/s
 numkong.dot u8 → u32                        ██████████████████████████████▎     4.88 GSO/s
 numkong.euclidean f32 → f64                 ████████████████████▌               3.33 GSO/s
 numkong.dot i8 → i32                        ████████████████████▏               3.25 GSO/s
-scipy.linalg.blas.sdot f32 → f32            ███████████████████▌                3.14 GSO/s
 numkong.dot f32 → f64                       █████████████████                   2.76 GSO/s
-scipy.spatial.distance.euclidean u8 → f32   ███                                 0.48 GSO/s
 numkong.euclidean bf16 → f32                ██▋                                 0.41 GSO/s
+numkong.dot bf16 → f32                      ██▍                                 0.37 GSO/s
+
+Alternatives:
+scipy.linalg.blas.sdot f32 → f32            ███████████████████▌                3.14 GSO/s
+scipy.spatial.distance.euclidean u8 → f32   ███                                 0.48 GSO/s
 scipy.spatial.distance.euclidean i8 → f32   ██▍                                 0.38 GSO/s
 scipy.spatial.distance.euclidean f32 → f32  ██▍                                 0.38 GSO/s
-numkong.dot bf16 → f32                      ██▍                                 0.37 GSO/s
 ```
 
 See [similarity/README.md](similarity/README.md) for details.
@@ -117,23 +121,27 @@ The merged lists below include _angular_ and _euclidean_ metrics, and the headli
 Compared to Rust projects, it means:
 
 ```text
+NumKong:
 numkong::Tensor::angulars_packed u8 → f32      ██████████████████████████████ 694.88 GSO/s
 numkong::Tensor::angulars_packed i8 → f32      █████████████████████████████▋ 686.93 GSO/s
 numkong::Tensor::euclideans_packed i8 → f32    █████████████████████████████▋ 685.67 GSO/s
 numkong::Tensor::euclideans_packed u8 → f32    █████████████████████████████  672.37 GSO/s
 numkong::Tensor::angulars_packed bf16 → f32    █████████████▏                 304.59 GSO/s
 numkong::Tensor::euclideans_packed bf16 → f32  █████████████                  302.61 GSO/s
+numkong::Tensor::euclideans_packed f32 → f64   █                               21.22 GSO/s
+numkong::Tensor::angulars_packed f32 → f64     █                               20.64 GSO/s
+
+Alternatives:
 ndarray angular matrix f32 → f32               █▊                              38.20 GSO/s
 nalgebra euclidean matrix f32 → f32            █▊                              37.91 GSO/s
 ndarray euclidean matrix f32 → f32             █▊                              37.59 GSO/s
 nalgebra angular matrix f32 → f32              █▊                              36.97 GSO/s
-numkong::Tensor::euclideans_packed f32 → f64   █                               21.22 GSO/s
-numkong::Tensor::angulars_packed f32 → f64     █                               20.64 GSO/s
 ```
 
 Compared to Python through SciPy `cdist`:
 
 ```text
+NumKong:
 numkong.angulars_packed u8 → f32      ███████████████████████████████████████ 465.04 GSO/s
 numkong.euclideans_packed u8 → f32    ██████████████████████████████████████▊ 463.47 GSO/s
 numkong.euclideans_packed i8 → f32    ██████████████████████████████████████▊ 463.37 GSO/s
@@ -142,6 +150,8 @@ numkong.angulars_packed bf16 → f32    █████████████�
 numkong.euclideans_packed bf16 → f32  █████████████████▌                      210.12 GSO/s
 numkong.euclideans_packed f32 → f64   █▊                                       20.24 GSO/s
 numkong.angulars_packed f32 → f64     █▌                                       19.84 GSO/s
+
+Alternatives:
 scipy.cdist euclidean f32 → f64       ▎                                         2.83 GSO/s
 scipy.cdist cosine f32 → f64          ▎                                         2.62 GSO/s
 ```
@@ -220,9 +230,12 @@ NumKong promotes _f32 → f64_ here as well, while ndarray stays in _f32_.
 In Rust:
 
 ```text
+NumKong:
 numkong::MaxSimPackedMatrix::score f16 → f32   ██████████████████████████████ 423.69 GSO/s
 numkong::MaxSimPackedMatrix::score f32 → f64   █████████████████████████████▌ 415.47 GSO/s
 numkong::MaxSimPackedMatrix::score bf16 → f32  ███████████████▊               224.48 GSO/s
+
+Alternatives:
 ndarray Q @ Dᵀ max-reduce f32 → f32            ██▋                             38.36 GSO/s
 ```
 
@@ -237,8 +250,11 @@ The merged lists below include both _Haversine_ and _Vincenty_ distances.
 Compared to Rust projects, it means:
 
 ```text
+NumKong:
 numkong::haversine       █████████████████████████████████████████████████████ 564.53 MP/s
 numkong::vincenty        █████▎                                                 57.76 MP/s
+
+Alternatives:
 geo::Haversine distance  ██▍                                                    25.53 MP/s
 geo::Vincenty distance                                                           1.20 MP/s
 ```
@@ -246,8 +262,11 @@ geo::Vincenty distance                                                          
 Compared to Python and its alternatives:
 
 ```text
+NumKong:
 numkong.haversine            █████████████████████████████████████████████████ 526.05 MP/s
 numkong.vincenty             █████▎                                             57.22 MP/s
+
+Alternatives:
 geopy.distance.great_circle                                                      0.21 MP/s
 geopy.distance.geodesic                                                        0.0107 MP/s
 ```
