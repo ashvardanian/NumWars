@@ -22,9 +22,9 @@ mod utils;
 use argminmax::ArgMinMax;
 use criterion::measurement::WallTime;
 use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion, Throughput};
-use ndarray::Array1;
+use ndarray::{Array1, Array2};
 use num_traits::Float;
-use numkong::{ReduceMinMax, ReduceMoments};
+use numkong::{bf16, capabilities, f16, Dot, FloatLike, ReduceMinMax, ReduceMoments};
 use polars::prelude::*;
 use std::hint::black_box;
 use std::iter::Sum;
@@ -42,6 +42,7 @@ enum ReduceOp {
     ArgMax,
     Moments,
     MinMax,
+    RowNorms,
 }
 
 impl ReduceOp {
@@ -55,6 +56,7 @@ impl ReduceOp {
             ReduceOp::ArgMax => "argmax",
             ReduceOp::Moments => "moments",
             ReduceOp::MinMax => "minmax",
+            ReduceOp::RowNorms => "row_norms",
         }
     }
 }
@@ -202,6 +204,13 @@ fn baseline_minmax_ord<T: Copy + PartialOrd>(data: &[T]) -> (T, usize, T, usize)
     (min_value, min_index, max_value, max_index)
 }
 
+fn baseline_row_norms_float<T: Float + Sum>(data: &[T], output: &mut [T], batch_size: usize, ndim: usize) {
+    for row in 0..batch_size {
+        let row_data = &data[row * ndim..(row + 1) * ndim];
+        output[row] = row_data.iter().map(|&v| v * v).sum::<T>().sqrt();
+    }
+}
+
 // endregion
 
 // region: Backend run traits
@@ -242,6 +251,7 @@ fn run_baseline_float<T: Float + Sum>(op: ReduceOp, group: &mut BenchmarkGroup<'
                 bench.iter(|| black_box(baseline_minmax_float(data)))
             });
         }
+        ReduceOp::RowNorms => {} // handled directly in bench_row_norms
     }
 }
 
@@ -269,7 +279,7 @@ fn run_baseline_int<T: Copy + PartialOrd + Into<i64>>(
         ReduceOp::MinMax => {
             group.bench_function("baseline", |bench| bench.iter(|| black_box(baseline_minmax_ord(data))));
         }
-        ReduceOp::Norm | ReduceOp::Moments => {}
+        ReduceOp::Norm | ReduceOp::Moments | ReduceOp::RowNorms => {}
     }
 }
 
@@ -355,7 +365,7 @@ fn run_numkong_reduce<T: ReduceMoments + ReduceMinMax>(
                 bench.iter(|| black_box(T::reduce_minmax(data, stride)))
             });
         }
-        ReduceOp::Norm => {}
+        ReduceOp::Norm | ReduceOp::RowNorms => {} // handled directly in bench_row_norms
     }
 }
 
@@ -384,7 +394,8 @@ impl RunNdarray for f32 {
             | ReduceOp::ArgMin
             | ReduceOp::ArgMax
             | ReduceOp::Moments
-            | ReduceOp::MinMax => {}
+            | ReduceOp::MinMax
+            | ReduceOp::RowNorms => {} // RowNorms handled directly in bench_row_norms
         }
     }
 }
@@ -404,7 +415,8 @@ impl RunNdarray for f64 {
             | ReduceOp::ArgMin
             | ReduceOp::ArgMax
             | ReduceOp::Moments
-            | ReduceOp::MinMax => {}
+            | ReduceOp::MinMax
+            | ReduceOp::RowNorms => {} // RowNorms handled directly in bench_row_norms
         }
     }
 }
@@ -425,7 +437,12 @@ impl RunPolars for f32 {
             ReduceOp::Sum => group.bench_function("polars", |bench| bench.iter(|| black_box(chunked.sum()))),
             ReduceOp::Min => group.bench_function("polars", |bench| bench.iter(|| black_box(chunked.min()))),
             ReduceOp::Max => group.bench_function("polars", |bench| bench.iter(|| black_box(chunked.max()))),
-            ReduceOp::Norm | ReduceOp::ArgMin | ReduceOp::ArgMax | ReduceOp::Moments | ReduceOp::MinMax => group,
+            ReduceOp::Norm
+            | ReduceOp::ArgMin
+            | ReduceOp::ArgMax
+            | ReduceOp::Moments
+            | ReduceOp::MinMax
+            | ReduceOp::RowNorms => group,
         };
     }
 }
@@ -437,7 +454,12 @@ impl RunPolars for f64 {
             ReduceOp::Sum => group.bench_function("polars", |bench| bench.iter(|| black_box(chunked.sum()))),
             ReduceOp::Min => group.bench_function("polars", |bench| bench.iter(|| black_box(chunked.min()))),
             ReduceOp::Max => group.bench_function("polars", |bench| bench.iter(|| black_box(chunked.max()))),
-            ReduceOp::Norm | ReduceOp::ArgMin | ReduceOp::ArgMax | ReduceOp::Moments | ReduceOp::MinMax => group,
+            ReduceOp::Norm
+            | ReduceOp::ArgMin
+            | ReduceOp::ArgMax
+            | ReduceOp::Moments
+            | ReduceOp::MinMax
+            | ReduceOp::RowNorms => group,
         };
     }
 }
@@ -462,7 +484,13 @@ where
         ReduceOp::ArgMax => {
             group.bench_function("argminmax", |bench| bench.iter(|| black_box(data.argmax())));
         }
-        ReduceOp::Sum | ReduceOp::Norm | ReduceOp::Min | ReduceOp::Max | ReduceOp::Moments | ReduceOp::MinMax => {}
+        ReduceOp::Sum
+        | ReduceOp::Norm
+        | ReduceOp::Min
+        | ReduceOp::Max
+        | ReduceOp::Moments
+        | ReduceOp::MinMax
+        | ReduceOp::RowNorms => {}
     }
 }
 
@@ -533,6 +561,7 @@ where
 // region: Benchmarks
 
 pub fn bench_sum(c: &mut Criterion) {
+    capabilities::configure_thread();
     let size = get_tensor_dims();
     bench_reduce_op_dtype(c, ReduceOp::Sum, "f32", size, 1.0f32);
     bench_reduce_op_dtype(c, ReduceOp::Sum, "f64", size, 1.0f64);
@@ -602,6 +631,162 @@ pub fn bench_minmax(c: &mut Criterion) {
     bench_reduce_op_dtype(c, ReduceOp::MinMax, "i16", size, 1i16);
     bench_reduce_op_dtype(c, ReduceOp::MinMax, "i32", size, 1i32);
     bench_reduce_op_dtype(c, ReduceOp::MinMax, "i64", size, 1i64);
+}
+
+trait RunRowNorms: Clone + 'static {
+    fn bench_all(group: &mut BenchmarkGroup<'_, WallTime>, data: &[Self], batch_size: usize, ndim: usize);
+}
+
+trait RunRowNormsNdarray: Clone + 'static {
+    fn bench_ndarray(_group: &mut BenchmarkGroup<'_, WallTime>, _data: &[Self], _batch_size: usize, _ndim: usize) {}
+}
+
+fn bench_row_norms_ndarray<T: Float + Sum + Clone + 'static>(
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    data: &[T],
+    batch_size: usize,
+    ndim: usize,
+) {
+    let matrix = Array2::<T>::from_shape_vec((batch_size, ndim), data.to_vec()).unwrap();
+    let mut output = vec![T::zero(); batch_size];
+    group.bench_function("ndarray", |bench| {
+        bench.iter(|| {
+            for (i, row) in matrix.rows().into_iter().enumerate() {
+                output[i] = row.dot(&row).sqrt();
+            }
+            black_box(&output);
+        })
+    });
+}
+
+impl RunRowNormsNdarray for f32 {
+    fn bench_ndarray(group: &mut BenchmarkGroup<'_, WallTime>, data: &[f32], batch_size: usize, ndim: usize) {
+        bench_row_norms_ndarray(group, data, batch_size, ndim);
+    }
+}
+
+impl RunRowNormsNdarray for f64 {
+    fn bench_ndarray(group: &mut BenchmarkGroup<'_, WallTime>, data: &[f64], batch_size: usize, ndim: usize) {
+        bench_row_norms_ndarray(group, data, batch_size, ndim);
+    }
+}
+
+impl RunRowNormsNdarray for bf16 {}
+impl RunRowNormsNdarray for f16 {}
+
+impl RunRowNorms for f32 {
+    fn bench_all(group: &mut BenchmarkGroup<'_, WallTime>, data: &[f32], batch_size: usize, ndim: usize) {
+        let mut output = vec![0.0f32; batch_size];
+        group.bench_function("baseline", |bench| {
+            bench.iter(|| {
+                baseline_row_norms_float(data, &mut output, batch_size, ndim);
+                black_box(&output);
+            })
+        });
+        group.bench_function("numkong", |bench| {
+            bench.iter(|| {
+                for row in 0..batch_size {
+                    let row_data = &data[row * ndim..(row + 1) * ndim];
+                    output[row] = (f32::dot(row_data, row_data).unwrap() as f32).sqrt();
+                }
+                black_box(&output);
+            })
+        });
+        f32::bench_ndarray(group, data, batch_size, ndim);
+    }
+}
+
+impl RunRowNorms for f64 {
+    fn bench_all(group: &mut BenchmarkGroup<'_, WallTime>, data: &[f64], batch_size: usize, ndim: usize) {
+        let mut output = vec![0.0f64; batch_size];
+        group.bench_function("baseline", |bench| {
+            bench.iter(|| {
+                baseline_row_norms_float(data, &mut output, batch_size, ndim);
+                black_box(&output);
+            })
+        });
+        group.bench_function("numkong", |bench| {
+            bench.iter(|| {
+                for row in 0..batch_size {
+                    let row_data = &data[row * ndim..(row + 1) * ndim];
+                    output[row] = f64::dot(row_data, row_data).unwrap().sqrt();
+                }
+                black_box(&output);
+            })
+        });
+        f64::bench_ndarray(group, data, batch_size, ndim);
+    }
+}
+
+fn bench_row_norms_mini<T>(group: &mut BenchmarkGroup<'_, WallTime>, data: &[T], batch_size: usize, ndim: usize)
+where
+    T: FloatLike + Dot + Clone + 'static,
+    <T as Dot>::Output: Into<f64>,
+{
+    let mut output = vec![0.0f32; batch_size];
+    group.bench_function("baseline", |bench| {
+        bench.iter(|| {
+            for row in 0..batch_size {
+                let s = &data[row * ndim..(row + 1) * ndim];
+                output[row] = s
+                    .iter()
+                    .map(|v| {
+                        let f = v.to_f32();
+                        f * f
+                    })
+                    .sum::<f32>()
+                    .sqrt();
+            }
+            black_box(&output);
+        })
+    });
+    group.bench_function("numkong", |bench| {
+        bench.iter(|| {
+            for row in 0..batch_size {
+                let s = &data[row * ndim..(row + 1) * ndim];
+                let dot_f64: f64 = T::dot(s, s).unwrap().into();
+                output[row] = (dot_f64 as f32).sqrt();
+            }
+            black_box(&output);
+        })
+    });
+}
+
+impl RunRowNorms for bf16 {
+    fn bench_all(group: &mut BenchmarkGroup<'_, WallTime>, data: &[bf16], batch_size: usize, ndim: usize) {
+        bench_row_norms_mini(group, data, batch_size, ndim);
+    }
+}
+
+impl RunRowNorms for f16 {
+    fn bench_all(group: &mut BenchmarkGroup<'_, WallTime>, data: &[f16], batch_size: usize, ndim: usize) {
+        bench_row_norms_mini(group, data, batch_size, ndim);
+    }
+}
+
+fn bench_row_norms_dtype<T: RunRowNorms>(c: &mut Criterion, dtype: &str, batch_size: usize, ndim: usize, init: T) {
+    let name = format!("reduce/row_norms/{dtype}");
+    if !should_run_benchmark(&name) {
+        return;
+    }
+
+    let total_elements = batch_size * ndim;
+    let mut group = c.benchmark_group(name);
+    group.throughput(Throughput::Bytes((total_elements * std::mem::size_of::<T>()) as u64));
+    let data = vec![init; total_elements];
+
+    T::bench_all(&mut group, &data, batch_size, ndim);
+    group.finish();
+}
+
+pub fn bench_row_norms(c: &mut Criterion) {
+    capabilities::configure_thread();
+    let ndim = get_vector_dims();
+    let batch_size = get_batch_size();
+    bench_row_norms_dtype(c, "f32", batch_size, ndim, 1.0f32);
+    bench_row_norms_dtype(c, "f64", batch_size, ndim, 1.0f64);
+    bench_row_norms_dtype(c, "bf16", batch_size, ndim, bf16::from_f32(1.0));
+    bench_row_norms_dtype(c, "f16", batch_size, ndim, f16::from_f32(1.0));
 }
 
 // endregion
@@ -701,6 +886,16 @@ mod tests {
     }
 
     #[test]
+    fn baseline_row_norms_float_correctness() {
+        // 2 rows of 2 elements: [3, 4] and [5, 12]
+        let data = vec![3.0f32, 4.0, 5.0, 12.0];
+        let mut norms = vec![0.0f32; 2];
+        baseline_row_norms_float(&data, &mut norms, 2, 2);
+        assert!((norms[0] - 5.0).abs() < 1e-6);
+        assert!((norms[1] - 13.0).abs() < 1e-6);
+    }
+
+    #[test]
     fn baseline_sum_int_i8_correctness() {
         let data = vec![1i8, 2, 3, 4];
         assert_eq!(baseline_sum_int(&data), 10);
@@ -740,7 +935,8 @@ criterion_group! {
         bench_argmin,
         bench_argmax,
         bench_moments,
-        bench_minmax
+        bench_minmax,
+        bench_row_norms
 }
 criterion_main!(benches);
 

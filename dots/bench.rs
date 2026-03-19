@@ -23,15 +23,15 @@
 //! ```
 //!
 //! Environment variables:
-//! - NUMWARS_DIMS_WIDTH: Matrix C width (n) (default: 1024)
-//! - NUMWARS_DIMS_HEIGHT: Matrix C height (m) (default: 1024)
-//! - NUMWARS_DIMS_DEPTH: Shared dimension (k) (default: 1024)
+//! - NUMWARS_DIMS_WIDTH: Matrix C width n (default: 2048)
+//! - NUMWARS_DIMS_HEIGHT: Matrix C height m (default: 2048)
+//! - NUMWARS_DIMS_DEPTH: Shared dimension k (default: 2048)
 //! - NUMWARS_FILTER: Regex to filter benchmark names (default: none, runs all)
 //! - NUMWARS_WARMUP_SECONDS: Warmup duration (default: 3.0)
 //! - NUMWARS_PROFILE_SECONDS: Measurement duration (default: 10.0)
 //!
-//! Benchmark naming: dots/{dtype}/{m}x{n}x{k}
-//! Examples: dots/f32/1024x1024x1024, dots/i8/1024x1024x1024
+//! Benchmark naming: dots/{dtype}/{height}x{width}x{depth}
+//! Examples: dots/f32/2048x2048x2048, dots/i8/2048x2048x2048
 
 #[path = "../utils.rs"]
 mod utils;

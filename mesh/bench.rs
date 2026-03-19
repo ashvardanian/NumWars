@@ -10,7 +10,7 @@
 //! ```
 //!
 //! Environment variables:
-//! - NUMWARS_BATCH_SIZE: Number of 3D points per cloud (default: 1000)
+//! - NUMWARS_DIMS: Number of 3D points per cloud (default: 2048)
 //! - NUMWARS_FILTER: Regex to filter benchmark names
 //!
 //! Benchmark naming: mesh/{operation}/{dtype}

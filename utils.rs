@@ -467,21 +467,21 @@ pub fn format_bytes(bytes: usize) -> String {
 
 // region: Dimension Helpers
 
-/// Get matrix output width (n in C = A @ B.T where C is m×n).
+/// Get matrix output width in C = A @ B.T where C is height×width.
 /// Used in dots/ module for matrix multiplication benchmarks.
 #[allow(dead_code)]
 pub fn get_matrix_dims_width() -> usize {
     get_env_parsed("NUMWARS_DIMS_WIDTH", 2048)
 }
 
-/// Get matrix output height (m in C = A @ B.T where C is m×n).
+/// Get matrix output height in C = A @ B.T where C is height×width.
 /// Used in dots/ module for matrix multiplication benchmarks.
 #[allow(dead_code)]
 pub fn get_matrix_dims_height() -> usize {
     get_env_parsed("NUMWARS_DIMS_HEIGHT", 2048)
 }
 
-/// Get matrix shared dimension (k in A @ B.T where A is m×k and B is n×k).
+/// Get matrix shared dimension in A @ B.T where A is height×depth and B is width×depth.
 /// Used in dots/ module for matrix multiplication benchmarks.
 #[allow(dead_code)]
 pub fn get_matrix_dims_depth() -> usize {
@@ -502,11 +502,10 @@ pub fn get_vector_dims() -> usize {
     get_env_parsed("NUMWARS_DIMS", 2048)
 }
 
-/// Get batch size for similarity operations.
-/// Used in similarity/ module to determine number of vector pairs to process.
+/// Alias for get_vector_dims() — kept for backward compatibility.
 #[allow(dead_code)]
 pub fn get_batch_size() -> usize {
-    get_env_parsed("NUMWARS_BATCH_SIZE", 1000)
+    get_vector_dims()
 }
 
 /// Get thread count for parallel benchmarks.

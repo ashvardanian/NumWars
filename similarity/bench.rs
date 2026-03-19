@@ -20,7 +20,6 @@
 //!
 //! Environment variables:
 //! - NUMWARS_DIMS: Vector dimensions (default: 2048)
-//! - NUMWARS_BATCH_SIZE: Number of vector pairs (default: 1000)
 //! - NUMWARS_FILTER: Regex to filter benchmark names (default: none, runs all)
 //! - NUMWARS_WARMUP_SECONDS: Warmup time in seconds (default: 3.0)
 //! - NUMWARS_PROFILE_SECONDS: Measurement time in seconds (default: 10.0)

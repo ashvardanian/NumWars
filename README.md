@@ -117,18 +117,18 @@ The merged lists below include _angular_ and _euclidean_ metrics, and the headli
 Compared to Rust projects, it means:
 
 ```text
-numkong::Tensor::angulars_packed i8 → f32      ████████████████████ 590.88 GSO/s
-numkong::Tensor::angulars_packed u8 → f32      ███████████████████▉ 588.37 GSO/s
-numkong::Tensor::euclideans_packed u8 → f32    ███████████████████▊ 585.00 GSO/s
-numkong::Tensor::euclideans_packed i8 → f32    ███████████████████▋ 581.99 GSO/s
-numkong::Tensor::euclideans_packed bf16 → f32  ██████████▌          311.46 GSO/s
-numkong::Tensor::angulars_packed bf16 → f32    ██████████▌          310.52 GSO/s
-ndarray angular matrix f32 → f32               █▎                    37.15 GSO/s
-ndarray euclidean matrix f32 → f32             █▏                    36.03 GSO/s
-nalgebra euclidean matrix f32 → f32            █                     28.83 GSO/s
-nalgebra angular matrix f32 → f32              █                     28.83 GSO/s
-numkong::Tensor::angulars_packed f32 → f64     ▋                     19.44 GSO/s
-numkong::Tensor::euclideans_packed f32 → f64   ▋                     19.37 GSO/s
+numkong::Tensor::angulars_packed u8 → f32      ████████████████████ 694.88 GSO/s
+numkong::Tensor::angulars_packed i8 → f32      ███████████████████▊ 686.93 GSO/s
+numkong::Tensor::euclideans_packed i8 → f32    ███████████████████▊ 685.67 GSO/s
+numkong::Tensor::euclideans_packed u8 → f32    ███████████████████▍ 672.37 GSO/s
+numkong::Tensor::angulars_packed bf16 → f32    ████████▊            304.59 GSO/s
+numkong::Tensor::euclideans_packed bf16 → f32  ████████▋            302.61 GSO/s
+ndarray angular matrix f32 → f32               █▏                    38.20 GSO/s
+nalgebra euclidean matrix f32 → f32            █▏                    37.91 GSO/s
+ndarray euclidean matrix f32 → f32             █▏                    37.59 GSO/s
+nalgebra angular matrix f32 → f32              █▏                    36.97 GSO/s
+numkong::Tensor::euclideans_packed f32 → f64   ▋                     21.22 GSO/s
+numkong::Tensor::angulars_packed f32 → f64     ▋                     20.64 GSO/s
 ```
 
 Compared to Python through SciPy `cdist`:
@@ -150,7 +150,7 @@ See [similarities/README.md](similarities/README.md) for details.
 
 ### Elementwise Operations
 
-Bandwidth-sensitive elementwise kernels (add, multiply, FMA) over 2048 elements.
+Bandwidth-sensitive elementwise kernels — add, multiply, FMA — over 2048 elements.
 FMA shown as representative sample.
 In Rust:
 
@@ -176,32 +176,54 @@ See [each/README.md](each/README.md) for details.
 
 ### Reductions
 
-Horizontal reductions over 2048 `f32` elements, including sum, norm, min/max, argmin/argmax, moments, minmax, and row_norms.
-Sum shown as representative sample.
+Horizontal reductions over 1,000,000 _f32_ elements.
+The full suite covers sum, norm, min/max, argmin/argmax, moments, minmax, and row_norms.
+Sum and row-wise L2 norms shown as representative samples.
 In Rust:
 
 ```text
-polars::ChunkedArray::sum f32 → Option<f32>  ████████████████████ 43.86 GB/s
-numkong::reduce_moments().sum f32 → f64      ███████████████████▊ 43.26 GB/s
-ndarray::ArrayBase::sum f32 → f32            ████████████████▋    36.38 GB/s
-scalar sum loop f32 → f32                    ███                   6.67 GB/s
+ndarray::ArrayBase::sum f32 → f32            ████████████████████ 28.96 GB/s
+numkong::reduce_moments().sum f32 → f64      ███████████████████▏ 27.78 GB/s
+polars::ChunkedArray::sum f32 → Option<f32>  ██████████████████▉  27.52 GB/s
+scalar sum loop f32 → f32                    ████                  5.89 GB/s
+```
+
+Row-wise L2 norms over a 1000x2048 _f32_ matrix:
+
+```text
+ndarray row norms f32 → f32          ████████████████████ 24.79 GB/s
+numkong::Dot self-dot + sqrt f32     ████████████████▋    20.68 GB/s
+scalar row norms loop f32 → f32      █████                 6.08 GB/s
+```
+
+In Python over 1,000,000 elements:
+
+```text
+numkong.sum i8 → i8       ████████████████████ 30.87 GB/s
+numkong.sum f32 → f32     ███████████████████▏ 29.62 GB/s
+numkong.norm f32          ████████████████▌    25.56 GB/s
+numpy.sum f64 → f64       ████████████████▍    25.24 GB/s
+numkong.sum f64 → f64     █████████████▎       20.37 GB/s
+numpy.sum f32 → f32       ████████████▌        19.33 GB/s
+numkong.norm f64          ████████████▎        18.82 GB/s
+numpy.linalg.norm f64     █████▏                7.92 GB/s
+numpy.linalg.norm f32     ████▎                 6.64 GB/s
+numpy.sum i8 → i8         █▉                    2.83 GB/s
 ```
 
 See [reduce/README.md](reduce/README.md) for details.
 
 ### MaxSim
 
-ColBERT-style late interaction with 32 query vectors, 128 document vectors, and 2048 dimensions.
-NumKong promotes _f32 → f64_ here as well, while the baseline and matrix-style alternatives stay in _f32_.
+ColBERT-style late interaction with 2048 query vectors, 2048 document vectors, and 2048 dimensions.
+NumKong promotes _f32 → f64_ here as well, while ndarray stays in _f32_.
 In Rust:
 
 ```text
-numkong::MaxSimPackedMatrix::score bf16 → f32  ████████████████████ 1,331.55 GSO/s
-numkong::MaxSimPackedMatrix::score f16 → f32   ██████████████████▍  1,224.70 GSO/s
-numkong::MaxSimPackedMatrix::score f32 → f64   ████████████▉          859.61 GSO/s
-ndarray Q @ Dᵀ max-reduce f32 → f32            ▉                       57.87 GSO/s
-nalgebra Q × Dᵀ max-reduce f32 → f32           ▉                       57.39 GSO/s
-scalar MaxSim loop f32 → f32                                            3.26 GSO/s
+numkong::MaxSimPackedMatrix::score f16 → f32   ████████████████████ 423.69 GSO/s
+numkong::MaxSimPackedMatrix::score f32 → f64   ███████████████████▋ 415.47 GSO/s
+numkong::MaxSimPackedMatrix::score bf16 → f32  ██████████▌          224.48 GSO/s
+ndarray Q @ Dᵀ max-reduce f32 → f32            █▊                    38.36 GSO/s
 ```
 
 See [maxsim/README.md](maxsim/README.md) for details.
@@ -263,22 +285,47 @@ See [mesh/README.md](mesh/README.md) for details.
 
 ### Rust
 
+Every Rust benchmark is a Criterion harness behind a Cargo feature gate.
+Run one suite at a time or all at once:
+
 ```bash
+# One suite — default 2048-element workload
 RUSTFLAGS="-C target-cpu=native" \
-NUMWARS_WARMUP_SECONDS=0.5 \
-NUMWARS_PROFILE_SECONDS=2.0 \
-NUMWARS_SAMPLE_SIZE=15 \
-python scripts/update_root_readme.py
+cargo bench --features bench_similarity --bench bench_similarity
+
+# All suites
+RUSTFLAGS="-C target-cpu=native" \
+cargo bench --features all
 ```
+
+Tuning knobs (environment variables):
+
+| Variable                  | Default  | Purpose                                           |
+| :------------------------ | :------- | :------------------------------------------------ |
+| `NUMWARS_DIMS`            | 2048     | Vector / matrix dimension shared by most suites   |
+| `NUMWARS_DIMS_HEIGHT`     | 2048     | Row count for GEMM workloads (dots, maxsim)       |
+| `NUMWARS_DIMS_WIDTH`      | 2048     | Column count for GEMM workloads (dots, maxsim)    |
+| `NUMWARS_DIMS_DEPTH`      | 2048     | Shared (contraction) dimension for GEMM workloads |
+| `NUMWARS_FILTER`          | _(none)_ | Regex to select benchmarks by name                |
+| `NUMWARS_WARMUP_SECONDS`  | 3.0      | Criterion warm-up time                            |
+| `NUMWARS_PROFILE_SECONDS` | 10.0     | Criterion measurement time                        |
+| `NUMWARS_SAMPLE_SIZE`     | 50       | Criterion sample count                            |
 
 ### Python
 
-The generator creates and reuses a local `.venv` with `uv`, installs `.[similarity,each,dots,geospatial,mesh,reduce,similarities]`, and saves machine-readable outputs under `target/numwars/`.
-
-To re-render the README without rerunning the benchmarks:
+Install with `uv` and run any suite directly:
 
 ```bash
-python scripts/update_root_readme.py --from-existing
+uv run --with "numkong,numpy,scipy,tabulate,ml_dtypes" \
+python similarity/bench.py
+```
+
+Or install all extras and run from the repo root:
+
+```bash
+pip install -e ".[similarity,each,dots,geospatial,mesh,reduce,similarities]"
+python dots/bench.py
+python similarities/bench.py
 ```
 
 ## Benchmark Suites

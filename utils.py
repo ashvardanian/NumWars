@@ -198,6 +198,21 @@ def normalize_dtype_name(dtype_like) -> str:
     return mapping.get(text, text)
 
 
+def numkong_dtype_name(dtype_str: str) -> str:
+    """Map short dtype names (i8, u8, …) to numkong long names (int8, uint8, …)."""
+    mapping = {
+        "i64": "int64",
+        "i32": "int32",
+        "i16": "int16",
+        "i8": "int8",
+        "u64": "uint64",
+        "u32": "uint32",
+        "u16": "uint16",
+        "u8": "uint8",
+    }
+    return mapping.get(dtype_str, dtype_str)
+
+
 def calculate_gso_per_sec(num_operations: int, duration_secs: float) -> float:
     """Calculate giga scalar operations per second."""
     return (num_operations / duration_secs) / 1e9 if duration_secs > 0 else 0.0
@@ -510,7 +525,7 @@ def print_results_table(
 
 def get_matrix_dims_width() -> int:
     """
-    Get matrix output width (n in C = A @ B.T where C is m×n).
+    Get matrix output width in C = A @ B.T where C is height×width.
     Used in dots/ module for matrix multiplication benchmarks.
     """
     return get_env_parsed("NUMWARS_DIMS_WIDTH", 2048, int)
@@ -518,7 +533,7 @@ def get_matrix_dims_width() -> int:
 
 def get_matrix_dims_height() -> int:
     """
-    Get matrix output height (m in C = A @ B.T where C is m×n).
+    Get matrix output height in C = A @ B.T where C is height×width.
     Used in dots/ module for matrix multiplication benchmarks.
     """
     return get_env_parsed("NUMWARS_DIMS_HEIGHT", 2048, int)
@@ -526,7 +541,7 @@ def get_matrix_dims_height() -> int:
 
 def get_matrix_dims_depth() -> int:
     """
-    Get matrix shared dimension (k in A @ B.T where A is m×k and B is n×k).
+    Get matrix shared dimension in A @ B.T where A is height×depth and B is width×depth.
     Used in dots/ module for matrix multiplication benchmarks.
     """
     return get_env_parsed("NUMWARS_DIMS_DEPTH", 2048, int)
@@ -549,11 +564,8 @@ def get_vector_dims() -> int:
 
 
 def get_batch_size() -> int:
-    """
-    Get batch size for similarity operations.
-    Used in similarity/ module to determine number of vector pairs to process.
-    """
-    return get_env_parsed("NUMWARS_BATCH_SIZE", 1000, int)
+    """Alias for get_vector_dims() — kept for backward compatibility."""
+    return get_vector_dims()
 
 
 def get_thread_count() -> int:

@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Elementwise operation benchmarks: NumKong vs NumPy, PyTorch, JAX, TensorFlow.
+Elementwise operation benchmarks: NumKong vs NumPy.
+
+Benchmarks add, multiply, and fma operations across multiple data types.
 
 Can be run with uv:
-    uv run --with numkong,numpy,tabulate each/bench.py
+    uv run --with numkong,numpy,tabulate,ml_dtypes each/bench.py
 
 Or with traditional pip:
     pip install -e ".[each]"
@@ -13,524 +15,370 @@ Or with traditional pip:
 Environment variables:
     NUMWARS_FILTER - Regex filter for benchmark names
     NUMWARS_DIMS - Tensor size in elements (default: 1000000)
-    NUMWARS_WARMUP_SECONDS - Warmup time (default: 3.0)
-    NUMWARS_PROFILE_SECONDS - Profiling time (default: 10.0)
 """
-import os
-import sys
-import time
+
 import argparse
+import json
+import os
 import re
-from typing import List, Generator, Union, Tuple, Dict, Optional
+import sys
 from dataclasses import dataclass
-from itertools import product, chain
+from typing import List, Optional
 
-# Add parent directory to path to import utils
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import utils
 
-
-#! Before all else, ensure that we use only one thread for each library
-os.environ["OMP_NUM_THREADS"] = "1"  # OpenMP
-os.environ["MKL_NUM_THREADS"] = "1"  # MKL
-os.environ["NUMEXPR_NUM_THREADS"] = "1"  # NumExpr
-os.environ["VECLIB_MAXIMUM_THREADS"] = "1"  # Accelerate
-os.environ["OPENBLAS_NUM_THREADS"] = "1"  # OpenBLAS
-
-# NumPy and NumKong are obligatory for benchmarking
 import numpy as np
-import numkong as simd
-import tabulate
 
-# Set to ignore all floating-point errors
+try:
+    import numkong as nk
+except ImportError:
+    print("Error: numkong not found. Install with: pip install numkong")
+    sys.exit(1)
+
+try:
+    from utils import (
+        add_common_args,
+        format_duration,
+        get_env,
+        get_tensor_dims,
+        measure_average_duration,
+        normalize_dtype_name,
+        parse_numpy_dtype,
+        print_results_table,
+        should_run_benchmark,
+    )
+except ImportError:
+    print("Error: Could not import utils.py. Make sure it's in the parent directory.")
+    sys.exit(1)
+
+# Suppress floating-point warnings during benchmarking
 np.seterr(all="ignore")
 
 
-operation_names = [
-    "add",  # A + B
-    "multiply",  # A * B
-]
-dtype_names = [
-    ("int8", "int8"),  #! Presented as supported, but overflows most of the time
-    ("int16", "int16"),
-    ("int32", "int32"),
-    ("int64", "int64"),
-    ("uint8", "uint8"),  #! Presented as supported, but overflows most of the time
-    ("uint16", "uint16"),
-    ("uint32", "uint32"),
-    ("uint64", "uint64"),
-    ("bfloat16", "bfloat16"),  #! Not supported by NumPy
-    ("float16", "float16"),
-    ("float32", "float32"),
-    ("float64", "float64"),
-    # Common mixed precision variants:
-    ("float32", "float64"),  # f32f64
-    ("float16", "float32"),  # f16f32
-    ("float16", "float64"),  # f16f64
-    ("bfloat16", "float32"),  # bf16f32
-    ("bfloat16", "float64"),  # bf16f64
-    ("uint8", "int16"),  # u8i16
-    ("uint16", "int32"),  # u16i32
-    ("int8", "uint16"),  # i8u16
-    ("int16", "uint32"),  # i16u32
-]
-
-dtype_names_supported = [(x, y) for x, y in dtype_names if x != "bfloat16" and y != "bfloat16"]
-
-
-def get_test_shape() -> tuple:
-    """
-    Get tensor shape for benchmarking.
-
-    Uses NUMWARS_DIMS to determine total elements, creates 1D tensor.
-    """
-    total_elements = utils.get_tensor_dims()
-    return (total_elements,)
-
-
 @dataclass
-class Kernel:
-    """Data class to store information about a numeric kernel."""
-
-    name: str
-    first_dtype: str
-    second_dtype: str
-    baseline_func: callable
-    nk_func: callable
-    tensor_type: callable = np.array
-
-
-def serial_broadcast_shape(shape1, shape2):
-    # Computes the broadcasted shape following NumPy broadcasting rules
-    result_shape = []
-    len1, len2 = len(shape1), len(shape2)
-    for i in range(max(len1, len2)):
-        dim1 = shape1[-(i + 1)] if i < len1 else 1
-        dim2 = shape2[-(i + 1)] if i < len2 else 1
-        if dim1 == dim2 or dim1 == 1 or dim2 == 1:
-            result_shape.insert(0, max(dim1, dim2))
-        else:
-            raise ValueError(f"Shapes {shape1} and {shape2} are not compatible")
-    return tuple(result_shape)
+class BenchmarkResult:
+    library: str
+    operation: str
+    input_dtype: str
+    output_dtype: str
+    display_signature: str
+    elements: int
+    duration_secs: float
+    throughput_gbs: float
 
 
-def serial_ndindex(shape):
-    if not shape:
-        yield ()
-        return
-    for idx in range(shape[0]):
-        for rest in serial_ndindex(shape[1:]):
-            yield (idx,) + rest
+def dtype_itemsize(dtype_name: str) -> int:
+    mapping = {
+        "f64": 8,
+        "f32": 4,
+        "f16": 2,
+        "bf16": 2,
+        "i8": 1,
+    }
+    if dtype_name not in mapping:
+        raise KeyError(f"Unknown dtype itemsize for {dtype_name}")
+    return mapping[dtype_name]
 
 
-def serial_add(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    shape_a = a.shape
-    shape_b = b.shape
-    output_shape = serial_broadcast_shape(shape_a, shape_b)
-
-    # Pad shapes with ones on the left to align them with the output shape
-    len_output = len(output_shape)
-    len_a = len(shape_a)
-    len_b = len(shape_b)
-    padded_shape_a = (1,) * (len_output - len_a) + shape_a
-    padded_shape_b = (1,) * (len_output - len_b) + shape_b
-
-    # Prepare the output array
-    output = np.zeros(output_shape, dtype=np.result_type(a, b))
-
-    # Iterate over all possible indices in the output array
-    for idx in serial_ndindex(output_shape):
-        idx_a = []
-        idx_b = []
-        # Map output indices to input indices, considering broadcasting
-        for idx_i, dim_a, dim_b in zip(idx, padded_shape_a, padded_shape_b):
-            idx_a.append(idx_i if dim_a != 1 else 0)
-            idx_b.append(idx_i if dim_b != 1 else 0)
-        # Adjust indices to match the dimensions of 'a' and 'b'
-        idx_a = tuple(idx_a[-len_a:])
-        idx_b = tuple(idx_b[-len_b:])
-        # Perform the addition
-        val_a = a[idx_a]
-        val_b = b[idx_b]
-        output[idx] = val_a + val_b
-
-    return output
+def display_signature(input_dtype: str, output_dtype: str) -> str:
+    return f"{input_dtype} \u2192 {output_dtype}"
 
 
-def serial_multiply(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    shape_a = a.shape
-    shape_b = b.shape
-    output_shape = serial_broadcast_shape(shape_a, shape_b)
-
-    # Pad shapes with ones on the left to align them with the output shape
-    len_output = len(output_shape)
-    len_a = len(shape_a)
-    len_b = len(shape_b)
-    padded_shape_a = (1,) * (len_output - len_a) + shape_a
-    padded_shape_b = (1,) * (len_output - len_b) + shape_b
-
-    # Prepare the output array
-    output = np.zeros(output_shape, dtype=np.result_type(a, b))
-
-    # Iterate over all possible indices in the output array
-    for idx in serial_ndindex(output_shape):
-        idx_a = []
-        idx_b = []
-        # Map output indices to input indices, considering broadcasting
-        for idx_i, dim_a, dim_b in zip(idx, padded_shape_a, padded_shape_b):
-            idx_a.append(idx_i if dim_a != 1 else 0)
-            idx_b.append(idx_i if dim_b != 1 else 0)
-        # Adjust indices to match the dimensions of 'a' and 'b'
-        idx_a = tuple(idx_a[-len_a:])
-        idx_b = tuple(idx_b[-len_b:])
-        # Perform the addition
-        val_a = a[idx_a]
-        val_b = b[idx_b]
-        output[idx] = val_a * val_b
-
-    return output
+def build_array(elements: int, dtype_str: str, seed: int) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    if dtype_str == "bf16":
+        return rng.uniform(-1.0, 1.0, size=(elements,)).astype(np.float32).astype(parse_numpy_dtype("bf16"))
+    np_dtype = parse_numpy_dtype(dtype_str)
+    if dtype_str == "i8":
+        return rng.integers(-128, 127, size=(elements,), dtype=np_dtype)
+    return rng.uniform(-1.0, 1.0, size=(elements,)).astype(np.float32).astype(np_dtype)
 
 
-def yield_kernels(
-    operation_names: List[str],
-    dtype_names: List[Tuple[str]],
-    include_serial: bool = False,
-    include_torch: bool = False,
-    include_tf: bool = False,
-    include_jax: bool = False,
-) -> Generator[Kernel, None, None]:
-    """Yield a list of kernels to latency."""
 
-    if include_torch:
-        import torch
-    if include_tf:
-        # Disable TensorFlow warning messages
-        os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # This hides INFO and WARNING messages
+def benchmark_numkong_add(
+    elements: int, dtype_str: str, warmup: float, profile: float, seed: int = 42,
+) -> BenchmarkResult:
+    a = build_array(elements, dtype_str, seed)
+    b = build_array(elements, dtype_str, seed + 1)
 
-        import tensorflow as tf
-
-        # This will show only ERROR messages, not WARNING messages.
-        # Additionally, to filter out oneDNN related warnings, you might need to:
-        tf.get_logger().setLevel("FATAL")
-
-    if include_jax:
-        import jax
-        import jax.numpy as jnp
-
-    def raise_(ex):
-        """Utility function to allow raising exceptions in lambda functions."""
-        raise ex
-
-    def for_dtypes(
-        name: str,
-        dtypes: List[Tuple[str]],
-        baseline_func: callable,
-        nk_func: callable,
-        tensor_type: callable = np.array,
-    ) -> list:
-        """Filter out unsupported data types."""
-        return [
-            Kernel(
-                name=name,
-                baseline_func=baseline_func,
-                nk_func=nk_func,
-                tensor_type=tensor_type,
-                first_dtype=first_dtype,
-                second_dtype=second_dtype,
-            )
-            for first_dtype, second_dtype in dtypes
-        ]
-
-    if "add" in operation_names:
-        yield from for_dtypes(
-            "numpy.add",
-            dtype_names_supported,
-            np.add,
-            simd.add,
-        )
-        yield from for_dtypes(
-            "numpy.add",
-            [("bfloat16", "bfloat16")],
-            lambda A, B: raise_(NotImplementedError("Not implemented for bfloat16")),
-            lambda A, B: simd.add(A, B, a_dtype="bfloat16", b_dtype="bfloat16", out_dtype="bfloat16"),
-        )
-    if "add" in operation_names and include_serial:
-        yield from for_dtypes(
-            "serial.add",
-            dtype_names_supported,
-            serial_add,
-            simd.add,
-        )
-    if "multiply" in operation_names:
-        yield from for_dtypes(
-            "numpy.multiply",
-            dtype_names_supported,
-            np.multiply,
-            simd.multiply,
-        )
-    if "multiply" in operation_names and include_serial:
-        yield from for_dtypes(
-            "serial.multiply",
-            dtype_names_supported,
-            serial_multiply,
-            simd.multiply,
-        )
-
-
-@dataclass
-class Result:
-    first_dtype: str
-    second_dtype: str
-    name: str
-    shape_first: tuple
-    shape_second: tuple
-    baseline_seconds: Union[float, Exception]
-    nk_seconds: Union[float, Exception]
-    bytes_per_input: int
-    invocations: int
-
-
-def random_matrix(shape: tuple, dtype: str) -> np.ndarray:
-    if dtype == "bfloat16":
-        return np.random.randint(0, high=256, size=shape, dtype=np.int16)
-    if np.issubdtype(np.dtype(dtype), np.integer):
-        return np.random.randint(0, high=10, size=shape, dtype=dtype)
+    if dtype_str == "bf16":
+        func = lambda: nk.add(a, b, a_dtype="bfloat16", b_dtype="bfloat16", out_dtype="bfloat16")
     else:
-        return np.random.rand(*shape).astype(dtype)
+        func = lambda: nk.add(a, b)
+
+    duration = measure_average_duration(func, warmup, profile)
+    itemsize = dtype_itemsize(dtype_str)
+    bytes_processed = 2 * elements * itemsize + elements * itemsize
+    return BenchmarkResult(
+        library="NumKong",
+        operation="add",
+        input_dtype=dtype_str,
+        output_dtype=dtype_str,
+        display_signature=display_signature(dtype_str, dtype_str),
+        elements=elements,
+        duration_secs=duration,
+        throughput_gbs=bytes_processed / duration / 1e9,
+    )
 
 
-def latency(func, A, B, iterations: int = 1, warmup: int = 0) -> float:
-    """Time the amount of time it takes to run a function and return the average time per run in seconds."""
-    while warmup > 0:
-        func(A, B)
-        warmup -= 1
-    start_time = time.time_ns()
-    while iterations > 0:
-        func(A, B)
-        iterations -= 1
-    end_time = time.time_ns()
-    return (end_time - start_time) / 1e9
+def benchmark_numpy_add(
+    elements: int, dtype_str: str, warmup: float, profile: float, seed: int = 42,
+) -> BenchmarkResult:
+    a = build_array(elements, dtype_str, seed)
+    b = build_array(elements, dtype_str, seed + 1)
+    out = np.empty_like(a)
+
+    func = lambda: np.add(a, b, out=out)
+
+    duration = measure_average_duration(func, warmup, profile)
+    itemsize = dtype_itemsize(dtype_str)
+    bytes_processed = 2 * elements * itemsize + elements * itemsize
+    return BenchmarkResult(
+        library="NumPy",
+        operation="add",
+        input_dtype=dtype_str,
+        output_dtype=dtype_str,
+        display_signature=display_signature(dtype_str, dtype_str),
+        elements=elements,
+        duration_secs=duration,
+        throughput_gbs=bytes_processed / duration / 1e9,
+    )
 
 
-def yield_results(
-    first_shape: tuple,
-    second_shape: tuple,
-    kernels: List[Kernel],
-    warmup: int = 0,
-    time_limit: float = 1.0,
-    filter_pattern: Optional[re.Pattern] = None,
-) -> Generator[Result, None, None]:
-    # For each of the present data types, we may want to pre-generate several random matrices
-    count_matrices_per_dtype = 8
-    count_repetitions_per_matrix = 3  # This helps dampen the effect of time-measurement itself
+def benchmark_numkong_multiply(
+    elements: int, dtype_str: str, warmup: float, profile: float, seed: int = 42,
+) -> BenchmarkResult:
+    a = build_array(elements, dtype_str, seed)
+    b = build_array(elements, dtype_str, seed + 1)
 
-    # Let's cache the matrices for each data type and shape
-    matrices_per_dtype_and_shape: Dict[Tuple[str, tuple]] = {}
-    all_dtypes = set(kernel.first_dtype for kernel in kernels) | set(kernel.second_dtype for kernel in kernels)
-    for dtype, shape in product(all_dtypes, (first_shape, second_shape)):
-        matrix_key = (dtype, shape)
-        if dtype in matrices_per_dtype_and_shape:
-            continue
-        matrices = [random_matrix(shape, dtype) for _ in range(count_matrices_per_dtype)]
-        matrices_per_dtype_and_shape[matrix_key] = matrices
+    if dtype_str == "bf16":
+        func = lambda: nk.multiply(a, b, a_dtype="bfloat16", b_dtype="bfloat16", out_dtype="bfloat16")
+    else:
+        func = lambda: nk.multiply(a, b)
 
-    # For each kernel, repeat benchmarks for each data type
-    for kernel in kernels:
-        # Construct hierarchical benchmark name: each/{operation}/{dtype}
-        # For mixed types, use dtype1_dtype2 format
-        if kernel.first_dtype == kernel.second_dtype:
-            dtype_str = kernel.first_dtype
-        else:
-            dtype_str = f"{kernel.first_dtype}_{kernel.second_dtype}"
-        benchmark_name = f"each/{kernel.name}/{dtype_str}"
-
-        # Check if this benchmark should run
-        if not utils.should_run_benchmark(benchmark_name, filter_pattern):
-            continue
-
-        first_matrix_key = (kernel.first_dtype, first_shape)
-        first_matrices_numpy = matrices_per_dtype_and_shape[first_matrix_key]
-        first_matrices_converted = [kernel.tensor_type(m) for m in first_matrices_numpy]
-
-        second_matrix_key = (kernel.second_dtype, second_shape)
-        second_matrices_numpy = matrices_per_dtype_and_shape[second_matrix_key]
-        second_matrices_converted = [kernel.tensor_type(m) for m in second_matrices_numpy]
-
-        baseline_func = kernel.baseline_func
-        nk_func = kernel.nk_func
-        result = Result(
-            kernel.first_dtype,
-            kernel.second_dtype,
-            kernel.name,
-            baseline_seconds=0,
-            nk_seconds=0,
-            shape_first=first_shape,
-            shape_second=second_shape,
-            bytes_per_input=max(first_matrices_numpy[0].nbytes, second_matrices_numpy[0].nbytes),
-            invocations=count_matrices_per_dtype * count_repetitions_per_matrix,
-        )
-
-        # Try obtaining the baseline measurements
-        try:
-            for i, j in product(range(count_matrices_per_dtype), range(count_matrices_per_dtype)):
-                result.baseline_seconds += latency(
-                    baseline_func,
-                    first_matrices_converted[i],
-                    second_matrices_converted[j],
-                    count_repetitions_per_matrix,
-                    warmup,
-                )
-                if result.baseline_seconds > time_limit:
-                    break
-        except NotImplementedError as e:
-            result.baseline_seconds = e
-        except ValueError as e:
-            result.baseline_seconds = e  #! This happens often during overflows
-        except RuntimeError as e:
-            result.baseline_seconds = e  #! This happens often during overflows
-        except Exception as e:
-            # This is an unexpected exception... once you face it, please report it
-            raise RuntimeError(str(e) + " for %s(%s)" % (kernel.name, str(kernel.dtype))) from e
-
-        # Try obtaining the NumKong measurements
-        try:
-            for i, j in product(range(count_matrices_per_dtype), range(count_matrices_per_dtype)):
-                result.nk_seconds += latency(
-                    nk_func,
-                    first_matrices_numpy[i],
-                    second_matrices_numpy[j],
-                    count_repetitions_per_matrix,
-                    warmup,
-                )
-                if result.nk_seconds > time_limit:
-                    break
-        except NotImplementedError as e:
-            result.nk_seconds = e
-        except Exception as e:
-            # This is an unexpected exception... once you face it, please report it
-            raise RuntimeError(str(e) + " for %s(%s)" % (kernel.name, str(kernel.dtype))) from e
-
-        yield result
+    duration = measure_average_duration(func, warmup, profile)
+    itemsize = dtype_itemsize(dtype_str)
+    bytes_processed = 2 * elements * itemsize + elements * itemsize
+    return BenchmarkResult(
+        library="NumKong",
+        operation="multiply",
+        input_dtype=dtype_str,
+        output_dtype=dtype_str,
+        display_signature=display_signature(dtype_str, dtype_str),
+        elements=elements,
+        duration_secs=duration,
+        throughput_gbs=bytes_processed / duration / 1e9,
+    )
 
 
-def result_to_row(result: Result) -> List[str]:
-    dtype_cell = f"`{result.first_dtype}` & `{result.second_dtype}`"
-    name_cell = f"`{result.name}`"
-    baseline_cell = "💥"
-    nk_cell = "💥"
-    improvement_cell = "🤷"
+def benchmark_numpy_multiply(
+    elements: int, dtype_str: str, warmup: float, profile: float, seed: int = 42,
+) -> BenchmarkResult:
+    a = build_array(elements, dtype_str, seed)
+    b = build_array(elements, dtype_str, seed + 1)
+    out = np.empty_like(a)
 
-    if isinstance(result.baseline_seconds, float):
-        ops_per_second = result.invocations / result.baseline_seconds
-        gbs_per_second = result.bytes_per_input * ops_per_second / 1e9
-        baseline_cell = f"{ops_per_second:,.0f} ops/s, {gbs_per_second:,.3f} GB/s"
-    if isinstance(result.nk_seconds, float):
-        ops_per_second = result.invocations / result.nk_seconds
-        gbs_per_second = result.bytes_per_input * ops_per_second / 1e9
-        nk_cell = f"{ops_per_second:,.0f} ops/s, {gbs_per_second:,.3f} GB/s"
-    if isinstance(result.baseline_seconds, float) and isinstance(result.nk_seconds, float):
-        improvement_cell = f"{result.baseline_seconds / result.nk_seconds:,.2f} x"
+    func = lambda: np.multiply(a, b, out=out)
 
-    return [dtype_cell, name_cell, baseline_cell, nk_cell, improvement_cell]
+    duration = measure_average_duration(func, warmup, profile)
+    itemsize = dtype_itemsize(dtype_str)
+    bytes_processed = 2 * elements * itemsize + elements * itemsize
+    return BenchmarkResult(
+        library="NumPy",
+        operation="multiply",
+        input_dtype=dtype_str,
+        output_dtype=dtype_str,
+        display_signature=display_signature(dtype_str, dtype_str),
+        elements=elements,
+        duration_secs=duration,
+        throughput_gbs=bytes_processed / duration / 1e9,
+    )
+
+
+def benchmark_numkong_fma(
+    elements: int, dtype_str: str, warmup: float, profile: float, seed: int = 42,
+) -> BenchmarkResult:
+    a = build_array(elements, dtype_str, seed)
+    b = build_array(elements, dtype_str, seed + 1)
+    c = build_array(elements, dtype_str, seed + 2)
+
+    if dtype_str == "bf16":
+        func = lambda: nk.fma(a, b, c, dtype="bfloat16", alpha=1.5, beta=2.5)
+    else:
+        func = lambda: nk.fma(a, b, c, alpha=1.5, beta=2.5)
+
+    duration = measure_average_duration(func, warmup, profile)
+    itemsize = dtype_itemsize(dtype_str)
+    bytes_processed = 3 * elements * itemsize + elements * itemsize
+    return BenchmarkResult(
+        library="NumKong",
+        operation="fma",
+        input_dtype=dtype_str,
+        output_dtype=dtype_str,
+        display_signature=display_signature(dtype_str, dtype_str),
+        elements=elements,
+        duration_secs=duration,
+        throughput_gbs=bytes_processed / duration / 1e9,
+    )
+
+
+def benchmark_numpy_fma(
+    elements: int, dtype_str: str, warmup: float, profile: float, seed: int = 42,
+) -> BenchmarkResult:
+    a = build_array(elements, dtype_str, seed)
+    b = build_array(elements, dtype_str, seed + 1)
+    c = build_array(elements, dtype_str, seed + 2)
+
+    func = lambda: 1.5 * a * b + 2.5 * c
+
+    duration = measure_average_duration(func, warmup, profile)
+    itemsize = dtype_itemsize(dtype_str)
+    bytes_processed = 3 * elements * itemsize + elements * itemsize
+    return BenchmarkResult(
+        library="NumPy",
+        operation="fma",
+        input_dtype=dtype_str,
+        output_dtype=dtype_str,
+        display_signature=display_signature(dtype_str, dtype_str),
+        elements=elements,
+        duration_secs=duration,
+        throughput_gbs=bytes_processed / duration / 1e9,
+    )
+
+
+
+candidates = [
+    # add
+    ("numkong", "add", "f32"),
+    ("numkong", "add", "f64"),
+    ("numkong", "add", "f16"),
+    ("numkong", "add", "bf16"),
+    ("numkong", "add", "i8"),
+    ("numpy", "add", "f32"),
+    ("numpy", "add", "f64"),
+    ("numpy", "add", "f16"),
+    ("numpy", "add", "i8"),
+    # multiply
+    ("numkong", "multiply", "f32"),
+    ("numkong", "multiply", "f64"),
+    ("numkong", "multiply", "f16"),
+    ("numkong", "multiply", "bf16"),
+    ("numkong", "multiply", "i8"),
+    ("numpy", "multiply", "f32"),
+    ("numpy", "multiply", "f64"),
+    ("numpy", "multiply", "f16"),
+    ("numpy", "multiply", "i8"),
+    # fma
+    ("numkong", "fma", "f32"),
+    ("numkong", "fma", "f64"),
+    ("numkong", "fma", "f16"),
+    ("numkong", "fma", "bf16"),
+    ("numpy", "fma", "f32"),
+    ("numpy", "fma", "f64"),
+    ("numpy", "fma", "f16"),
+]
+
+dispatch = {
+    ("numkong", "add"): benchmark_numkong_add,
+    ("numpy", "add"): benchmark_numpy_add,
+    ("numkong", "multiply"): benchmark_numkong_multiply,
+    ("numpy", "multiply"): benchmark_numpy_multiply,
+    ("numkong", "fma"): benchmark_numkong_fma,
+    ("numpy", "fma"): benchmark_numpy_fma,
+}
+
+
+def result_to_entry(result: BenchmarkResult) -> dict:
+    return {
+        "suite": "each",
+        "workload": result.operation,
+        "benchmark_id": f"each/{result.operation}/{result.input_dtype}/{result.library}",
+        "library": result.library,
+        "operation": result.operation,
+        "dtype": result.input_dtype,
+        "input_dtype": result.input_dtype,
+        "output_dtype": result.output_dtype,
+        "display_signature": result.display_signature,
+        "elements": result.elements,
+        "primary_value": result.throughput_gbs,
+        "unit": "GB/s",
+        "throughput_gbs": result.throughput_gbs,
+        "duration_secs": result.duration_secs,
+    }
 
 
 def main():
-    # Argument parsing
-    parser = argparse.ArgumentParser(description="Benchmark NumKong and other libraries")
-    parser.add_argument(
-        "-k",
-        "--filter",
-        metavar="REGEX",
-        default=utils.get_env("NUMWARS_FILTER"),
-        help="Regex to filter which benchmarks to run (or set NUMWARS_FILTER env var). "
-             "Examples: --filter 'f32' (only float32 dtypes), --filter 'add' (only add operations)",
+    parser = argparse.ArgumentParser(
+        description="Benchmark elementwise operations: NumKong vs NumPy",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--torch", action="store_true", help="Profile PyTorch, must be installed")
-    parser.add_argument("--tf", action="store_true", help="Profile TensorFlow, must be installed")
-    parser.add_argument("--jax", action="store_true", help="Profile JAX, must be installed")
+    add_common_args(parser)
     parser.add_argument(
-        "--time-limit",
-        type=float,
-        default=1.0,
-        help="Maximum time in seconds to run each latency (default: 1.0)",
-    )
-    parser.add_argument(
-        "--warmup",
-        type=int,
-        default=0,
-        help="""
-        Number of warm-up runs before timing (default: 0)
-        
-        This will greatly affect the results for all heavy libraries relying on JIT compilation
-        or lazy computational graphs (e.g., TensorFlow, PyTorch, JAX).
-        """,
+        "--output-format",
+        choices=["table", "json"],
+        default="table",
+        help="Choose human-readable table output or machine-readable JSON (default: table).",
     )
     args = parser.parse_args()
 
-    # Always run all combinations - filtering is done via should_run_benchmark()
-    dtypes_profiled = dtype_names
-    operation_names_profiled = set(operation_names)
+    elements = get_tensor_dims()
 
-    # Compile filter pattern if provided
     filter_pattern = None
     if args.filter:
         try:
             filter_pattern = re.compile(args.filter)
         except re.error as e:
             print(f"Warning: Invalid regex pattern '{args.filter}': {e}")
-            filter_pattern = None
 
-    print("# Benchmarking NumKong")
-    print("- Operations:", ", ".join(operation_names_profiled))
-    print("- Datatypes:", ", ".join([f"{a} & {b}" for a, b in dtypes_profiled]))
-    try:
-        caps = [cap for cap, enabled in simd.get_capabilities().items() if enabled]
-        print("- Hardware capabilities:", ", ".join(caps))
+    metadata = {
+        "elements": elements,
+        "numkong_version": getattr(nk, "__version__", None),
+        "numpy_version": np.__version__,
+    }
 
-        # Log versions of NumKong, NumPy, SciPy, and scikit-learn
-        print(f"- NumKong version: {simd.__version__}")
-        print(f"- NumPy version: {np.__version__}")
+    all_results: List[BenchmarkResult] = []
+    for library_slug, operation, dtype_str in candidates:
+        benchmark_name = f"each/{operation}/{dtype_str}"
+        if not should_run_benchmark(benchmark_name, filter_pattern):
+            continue
+        if args.output_format == "table":
+            print(f"Benchmarking {benchmark_name} ({library_slug})")
 
-        if args.torch:
-            import torch
+        func = dispatch[(library_slug, operation)]
+        result = func(elements, dtype_str, args.warmup, args.time_limit, args.seed)
+        all_results.append(result)
 
-            print(f"- PyTorch version: {torch.__version__}")
-        if args.tf:
-            import tensorflow as tf
-
-            print(f"- TensorFlow version: {tf.__version__}")
-        if args.jax:
-            import jax
-
-            print(f"- JAX version: {jax.__version__}")
-
-        deps: dict = np.show_config(mode="dicts").get("Build Dependencies")
-        print("-- NumPy BLAS dependency:", deps["blas"]["name"])
-        print("-- NumPy LAPACK dependency:", deps["lapack"]["name"])
-    except Exception as e:
-        print(f"An error occurred: {e}")
-
-    kernels: List[Kernel] = list(
-        yield_kernels(
-            operation_names_profiled,
-            dtypes_profiled,
-            include_torch=args.torch,
-            include_tf=args.tf,
-            include_jax=args.jax,
+    if args.output_format == "json":
+        print(
+            json.dumps(
+                {
+                    "suite": "each",
+                    "settings": metadata,
+                    "results": [result_to_entry(r) for r in all_results],
+                },
+                indent=2,
+            )
         )
-    )
+        return
 
-    shape = get_test_shape()
-    print(f"## Shape: {shape} ({utils.format_number(np.prod(shape))} elements)")
+    if not all_results:
+        print("No benchmarks were run.")
+        return
 
-    results = yield_results(shape, shape, kernels, warmup=args.warmup, time_limit=args.time_limit, filter_pattern=filter_pattern)
-    columns_headers = ["Data Type", "Method", "Baseline", "NumKong", "Improvement"]
-    results_rows = []
-    for result in results:
-        result_row = result_to_row(result)
-        results_rows.append(result_row)
-
-    print(tabulate.tabulate(results_rows, headers=columns_headers))
+    print()
+    print(f"Elementwise operations: {elements:,} elements")
+    print()
+    table_rows = [
+        {
+            "Library": result.library,
+            "Operation": result.operation,
+            "Precision": result.display_signature,
+            "GB/s": f"{result.throughput_gbs:.2f}",
+            "Time": format_duration(result.duration_secs),
+        }
+        for result in all_results
+    ]
+    print_results_table(table_rows)
 
 
 if __name__ == "__main__":

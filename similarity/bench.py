@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Similarity benchmarks: NumKong vs NumPy, SciPy, scikit-learn, PyTorch, TensorFlow, JAX.
+Pairwise similarity benchmarks: NumKong vs NumPy vs SciPy.
+
+Measures dot, angular, euclidean, and sqeuclidean distances between vector pairs.
 
 Can be run with uv:
-    uv run --with numkong,numpy,scipy,scikit-learn,tabulate similarity/bench.py
+    uv run --with numkong,numpy,tabulate,ml_dtypes similarity/bench.py
 
 Or with traditional pip:
     pip install -e ".[similarity]"
@@ -12,757 +14,442 @@ Or with traditional pip:
 
 Environment variables:
     NUMWARS_FILTER - Regex filter for benchmark names
-    NUMWARS_DIMS - Vector dimensions (default: 1536)
-    NUMWARS_BATCH_SIZE - Number of vector pairs (default: 1000)
-    NUMWARS_WARMUP_SECONDS - Warmup time (default: 3.0)
-    NUMWARS_PROFILE_SECONDS - Profiling time (default: 10.0)
+    NUMWARS_DIMS - Vector dimension (default: 2048)
 """
-import os
-import sys
-import time
+
 import argparse
+import json
+import os
 import re
-from typing import List, Generator, Union, Optional
+import sys
 from dataclasses import dataclass
+from typing import List
 
-# Add parent directory to path to import utils
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import utils
 
-
-#! Before all else, ensure that we use only one thread for each library
-os.environ["OMP_NUM_THREADS"] = "1"  # OpenMP
-os.environ["MKL_NUM_THREADS"] = "1"  # MKL
-os.environ["NUMEXPR_NUM_THREADS"] = "1"  # NumExpr
-os.environ["VECLIB_MAXIMUM_THREADS"] = "1"  # Accelerate
-os.environ["OPENBLAS_NUM_THREADS"] = "1"  # OpenBLAS
-
-# NumPy and NumKong are obligatory for benchmarking
 import numpy as np
-import numkong as nk
-import tabulate
 
-# Set to ignore all floating-point errors
+try:
+    import numkong as nk
+except ImportError:
+    print("Error: numkong not found. Install with: pip install numkong")
+    sys.exit(1)
+
+try:
+    from utils import (
+        add_common_args,
+        calculate_gso_per_sec,
+        format_duration,
+        get_vector_dims,
+        measure_average_duration,
+        normalize_dtype_name,
+        parse_numpy_dtype,
+        print_results_table,
+        should_run_benchmark,
+    )
+except ImportError:
+    print("Error: Could not import utils.py. Make sure it's in the parent directory.")
+    sys.exit(1)
+
+# Suppress floating-point warnings (overflow in half-precision, etc.)
 np.seterr(all="ignore")
 
 
-metric_families = [
-    "dot",  # Dot product
-    "spatial",  # Euclidean and Angular distance
-    "binary",  # Hamming and Jaccard distance for binary vectors
-    "probability",  # Jensen-Shannon and Kullback-Leibler divergences for probability distributions
-    "sparse",  # Intersection of two sparse integer sets, with float/int weights
-]
-dtype_names = [
-    "bin8",  #! Not supported by SciPy
-    "int8",  #! Presented as supported, but overflows most of the time
-    "uint16",
-    "uint32",
-    "float16",
-    "float32",
-    "float64",
-    "bfloat16",  #! Not supported by NumPy
-    "complex32",  #! Not supported by NumPy
-    "complex64",
-    "complex128",
-]
-
-
 @dataclass
-class Kernel:
-    """Data class to store information about a numeric kernel."""
-
-    name: str
-    dtype: str
-    baseline_one_to_one_func: callable
-    baseline_many_to_many_func: callable
-    baseline_all_pairs_func: callable
-    nk_func: callable
-    nk_all_pairs_func: callable
-    tensor_type: callable = np.array
-
-
-def serial_angular(a: List[float], b: List[float]) -> float:
-    """Angular distance: 1 - ∑(aᵢ · bᵢ) / (‖a‖ · ‖b‖)"""
-    dot_product = sum(ai * bi for ai, bi in zip(a, b))
-    norm_a = sum(ai * ai for ai in a) ** 0.5
-    norm_b = sum(bi * bi for bi in b) ** 0.5
-    if norm_a == 0 and norm_b == 0:
-        return 1
-    if dot_product == 0:
-        return 0
-    return dot_product / (norm_a * norm_b)
+class BenchmarkResult:
+    library: str
+    metric: str
+    input_dtype: str
+    output_dtype: str
+    display_signature: str
+    ndim: int
+    count: int
+    duration_secs: float
+    gso_per_sec: float
 
 
-def serial_sqeuclidean(a: List[float], b: List[float]) -> float:
-    """Squared Euclidean distance: ∑(aᵢ - bᵢ)²"""
-    return sum((ai - bi) ** 2 for ai, bi in zip(a, b))
+NUM_MATRIX_PAIRS_ = 16
+NUM_REPS_PER_PAIR_ = 3
 
 
-def yield_kernels(
-    metric_families: List[str],
-    dtype_names: List[str],
-    include_scipy: bool = False,
-    include_scikit: bool = False,
-    include_torch: bool = False,
-    include_tf: bool = False,
-    include_jax: bool = False,
-) -> Generator[Kernel, None, None]:
-    """Yield a list of kernels to latency."""
-
-    if include_scipy:
-        import scipy as sp
-        import scipy.spatial.distance as spd
-        import scipy.special as scs
-
-    if include_scikit:
-        import sklearn as sk
-        import sklearn.metrics.pairwise as skp
-
-    if include_torch:
-        import torch
-    if include_tf:
-        # Disable TensorFlow warning messages
-        os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # This hides INFO and WARNING messages
-
-        import tensorflow as tf
-
-        # This will show only ERROR messages, not WARNING messages.
-        # Additionally, to filter out oneDNN related warnings, you might need to:
-        tf.get_logger().setLevel("FATAL")
-
-    if include_jax:
-        import jax
-        import jax.numpy as jnp
-
-    # Define a few helper functions to wrap non-vectorized kernels
-    def wrap_rows_batch_calls(baseline_one_to_one_func):
-        """Wrap a function to apply it row-wise to rows of two matrices.
-        It's needed as SciPy functions don't support batch processing out of the box."""
-
-        def wrapped(A, B):
-            for i in range(A.shape[0]):
-                baseline_one_to_one_func(A[i], B[i])
-
-        return wrapped
-
-    def wrap_rows_all_pairs_calls(baseline_one_to_one_func):
-        """Wrap a function to apply it row-wise to all possible pairs of rows of two matrices.
-        It's needed as NumPy `vdot`-like functions don't support batch processing out of the box."""
-
-        def wrapped(A, B):
-            for i in range(A.shape[0]):
-                for j in range(B.shape[0]):
-                    baseline_one_to_one_func(A[i], B[j])
-
-        return wrapped
-
-    def raise_(ex):
-        """Utility function to allow raising exceptions in lambda functions."""
-        raise ex
-
-    def for_dtypes(
-        name: str,
-        dtypes: List[str],
-        baseline_one_to_one_func: callable,
-        baseline_many_to_many_func: callable,
-        baseline_all_pairs_func: callable,
-        nk_func: callable,
-        nk_all_pairs_func: callable,
-        tensor_type: callable = np.array,
-    ) -> list:
-        """Filter out unsupported data types."""
-        return [
-            Kernel(
-                name=name,
-                baseline_one_to_one_func=baseline_one_to_one_func,
-                baseline_many_to_many_func=baseline_many_to_many_func,
-                baseline_all_pairs_func=baseline_all_pairs_func,
-                nk_func=nk_func,
-                nk_all_pairs_func=nk_all_pairs_func,
-                tensor_type=tensor_type,
-                dtype=dtype,
-            )
-            for dtype in dtypes
-            if dtype in dtype_names
-        ]
-
-    if "dot" in metric_families:
-        yield from for_dtypes(
-            "numpy.dot",
-            ["float64", "float32", "float16", "int8", "complex64", "complex128"],
-            np.dot,
-            lambda A, B: np.sum(A * B, axis=1),
-            lambda A, B: np.dot(A, B.T),
-            nk.dot,
-            lambda A, B: nk.cdist(A, B, metric="dot"),
-        )
-        yield from for_dtypes(
-            "numpy.dot",
-            ["complex32"],
-            lambda A, B: raise_(NotImplementedError("Not implemented for complex32")),
-            lambda A, B: raise_(NotImplementedError("Not implemented for complex32")),
-            lambda A, B: raise_(NotImplementedError("Not implemented for complex32")),
-            lambda A, B: nk.dot(A, B, "complex32"),
-            lambda A, B: nk.cdist(A, B, "complex32", metric="dot"),
-        )
-        yield from for_dtypes(
-            "numpy.dot",
-            ["bfloat16"],
-            lambda A, B: raise_(NotImplementedError("Not implemented for bfloat16")),
-            lambda A, B: raise_(NotImplementedError("Not implemented for bfloat16")),
-            lambda A, B: raise_(NotImplementedError("Not implemented for bfloat16")),
-            lambda A, B: nk.dot(A, B, "bfloat16"),
-            lambda A, B: nk.cdist(A, B, "bfloat16", metric="dot"),
-        )
-        yield from for_dtypes(
-            "numpy.vdot",
-            ["complex64", "complex128"],
-            np.vdot,
-            wrap_rows_batch_calls(np.vdot),
-            wrap_rows_all_pairs_calls(np.vdot),
-            nk.vdot,
-            lambda A, B: nk.cdist(A, B, metric="vdot"),
-        )
-    if "spatial" in metric_families:
-        yield from for_dtypes(
-            "serial.angular",
-            ["float64", "float32", "float16", "int8"],
-            serial_angular,
-            wrap_rows_batch_calls(serial_angular),
-            lambda A, B: spd.cdist(A, B, "cosine"),
-            nk.angular,
-            lambda A, B: nk.cdist(A, B, metric="angular"),
-        )
-        yield from for_dtypes(
-            "serial.sqeuclidean",
-            ["float64", "float32", "float16", "int8"],
-            serial_sqeuclidean,
-            wrap_rows_batch_calls(serial_sqeuclidean),
-            lambda A, B: spd.cdist(A, B, "sqeuclidean"),
-            nk.sqeuclidean,
-            lambda A, B: nk.cdist(A, B, metric="sqeuclidean"),
-        )
-    if "spatial" in metric_families and include_scipy:
-        yield from for_dtypes(
-            "scipy.cosine",
-            ["float64", "float32", "float16", "int8"],
-            spd.cosine,
-            wrap_rows_batch_calls(spd.cosine),
-            lambda A, B: spd.cdist(A, B, "cosine"),
-            nk.angular,
-            lambda A, B: nk.cdist(A, B, metric="angular"),
-        )
-        yield from for_dtypes(
-            "scipy.cosine",
-            ["bfloat16"],
-            lambda A, B: raise_(NotImplementedError(f"Not implemented for bfloat16")),
-            lambda A, B: raise_(NotImplementedError(f"Not implemented for bfloat16")),
-            lambda A, B: raise_(NotImplementedError(f"Not implemented for bfloat16")),
-            lambda A, B: nk.angular(A, B, "bfloat16"),
-            lambda A, B: nk.cdist(A, B, "bfloat16", metric="angular"),
-        )
-        yield from for_dtypes(
-            "scipy.sqeuclidean",
-            ["float64", "float32", "float16", "int8"],
-            spd.sqeuclidean,
-            wrap_rows_batch_calls(spd.sqeuclidean),
-            lambda A, B: spd.cdist(A, B, "sqeuclidean"),
-            nk.sqeuclidean,
-            lambda A, B: nk.cdist(A, B, metric="sqeuclidean"),
-        )
-
-    if "probability" in metric_families and include_scipy:
-        yield from for_dtypes(
-            "scipy.jensenshannon",
-            ["float64", "float32", "float16"],
-            spd.jensenshannon,
-            wrap_rows_batch_calls(spd.jensenshannon),
-            lambda A, B: spd.cdist(A, B, "jensenshannon"),
-            nk.jensenshannon,
-            lambda A, B: nk.cdist(A, B, metric="jensenshannon"),
-        )
-        yield from for_dtypes(
-            "scipy.kl_div",
-            ["float64", "float32", "float16"],
-            scs.kl_div,
-            wrap_rows_batch_calls(scs.kl_div),
-            wrap_rows_all_pairs_calls(scs.kl_div),
-            nk.kullbackleibler,
-            lambda A, B: nk.cdist(A, B, metric="kullbackleibler"),
-        )
-    if "binary" in metric_families and include_scipy:
-        yield from for_dtypes(
-            "scipy.hamming",
-            ["bin8"],
-            spd.hamming,
-            wrap_rows_batch_calls(spd.hamming),
-            lambda A, B: spd.cdist(A, B, "hamming"),
-            lambda A, B: nk.hamming(A, B, "bin8"),
-            lambda A, B: nk.cdist(A, B, "bin8", metric="hamming"),
-        )
-        yield from for_dtypes(
-            "scipy.jaccard",
-            ["bin8"],
-            spd.jaccard,
-            wrap_rows_batch_calls(spd.jaccard),
-            lambda A, B: spd.cdist(A, B, "jaccard"),
-            lambda A, B: nk.jaccard(A, B, "bin8"),
-            lambda A, B: nk.cdist(A, B, "bin8", metric="jaccard"),
-        )
-    if "spatial" in metric_families and include_scikit:
-        yield from for_dtypes(
-            "sklearn.cosine_similarity",
-            ["float64", "float32", "float16", "int8"],
-            lambda A, B: skp.cosine_similarity(A.reshape(1, len(A)), B.reshape(1, len(B))),
-            lambda A, B: raise_(NotImplementedError("Not implemented for many-to-many")),
-            skp.paired_cosine_distances,
-            nk.angular,
-            lambda A, B: nk.cdist(A, B, metric="angular"),
-        )
-        yield from for_dtypes(
-            "sklearn.euclidean_distances",
-            ["float64", "float32", "float16", "int8"],
-            lambda A, B: skp.euclidean_distances(A.reshape(1, len(A)), B.reshape(1, len(B))),
-            lambda A, B: raise_(NotImplementedError("Not implemented for many-to-many")),
-            skp.paired_euclidean_distances,
-            nk.sqeuclidean,
-            lambda A, B: nk.cdist(A, B, metric="sqeuclidean"),
-        )
-    if "dot" in metric_families and include_tf:
-        yield from for_dtypes(
-            "tensorflow.tensordot",
-            ["float64", "float32", "float16", "int8"],
-            lambda A, B: tf.tensordot(A, B, axes=1).numpy(),
-            lambda A, B: tf.reduce_sum(tf.multiply(A, B), axis=1).numpy(),
-            lambda A, B: tf.tensordot(A, B.T, axes=1).numpy(),
-            nk.dot,
-            lambda A, B: nk.cdist(A, B, metric="dot"),
-            tf.convert_to_tensor,
-        )
-    if "dot" in metric_families and include_jax:
-        yield from for_dtypes(
-            "jax.numpy.dot",
-            ["float64", "float32", "float16", "int8"],
-            lambda A, B: jnp.dot(A, B).block_until_ready(),
-            lambda A, B: jnp.einsum("ij,ij->i", A, B).block_until_ready(),
-            lambda A, B: jnp.dot(A, B.T).block_until_ready(),
-            nk.dot,
-            lambda A, B: nk.cdist(A, B, metric="dot"),
-            jnp.array,
-        )
-    if "dot" in metric_families and include_torch:
-        yield from for_dtypes(
-            "torch.dot",
-            ["float64", "float32", "float16", "int8"],
-            lambda A, B: torch.dot(A, B).item(),
-            lambda A, B: torch.bmm(A.unsqueeze(1), B.unsqueeze(2)).squeeze(),
-            lambda A, B: torch.dot(A, B.T).item(),
-            nk.dot,
-            lambda A, B: nk.cdist(A, B, metric="dot"),
-            torch.tensor,
-        )
+def display_signature(input_dtype: str, output_dtype: str) -> str:
+    return f"{input_dtype} \u2192 {output_dtype}"
 
 
-@dataclass
-class Result:
-    dtype: str
-    name: str
-    baseline_seconds: Union[float, Exception]
-    nk_seconds: Union[float, Exception]
-    bytes_per_vector: int
-    distance_calculations: int
+
+def random_matrix(count: int, ndim: int, dtype_str: str, seed: int) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    dtype = parse_numpy_dtype(dtype_str)
+    if dtype_str.startswith("f") or dtype_str in ("bf16",):
+        data = rng.uniform(-1.0, 1.0, size=(count, ndim)).astype(np.float32)
+        return data.astype(dtype)
+    elif dtype_str.startswith("i"):
+        return rng.integers(-100, 100, size=(count, ndim), dtype=dtype)
+    elif dtype_str.startswith("u"):
+        return rng.integers(0, 200, size=(count, ndim), dtype=dtype)
+    else:
+        return rng.uniform(-1.0, 1.0, size=(count, ndim)).astype(dtype)
 
 
-def random_matrix(count: int, ndim: int, dtype: str) -> np.ndarray:
-    if dtype == "complex128":
-        return (
-            np.random.randn(count, ndim // 2).astype(np.float64)
-            + 1j * np.random.randn(count, ndim // 2).astype(np.float64)
-        ).view(np.complex128)
-    if dtype == "complex64":
-        return (
-            np.random.randn(count, ndim // 2).astype(np.float32)
-            + 1j * np.random.randn(count, ndim // 2).astype(np.float32)
-        ).view(np.complex64)
-    if dtype == "complex32":
-        return np.random.randn(count, ndim).astype(np.float16)
-    if dtype == "float64":
-        return np.random.randn(count, ndim).astype(np.float64)
-    if dtype == "float32":
-        return np.random.randn(count, ndim).astype(np.float32)
-    if dtype == "float16":
-        return np.random.randn(count, ndim).astype(np.float16)
-    if dtype == "bfloat16":
-        return np.random.randint(0, high=256, size=(count, ndim), dtype=np.int16)
-    if dtype == "int8":
-        return np.random.randint(-100, high=100, size=(count, ndim), dtype=np.int8)
-    if dtype == "bin8":
-        return np.packbits(np.random.randint(0, high=2, size=(count, ndim), dtype=np.uint8), axis=0)
+_NK_METRIC_FUNC = {
+    "dot": nk.dot,
+    "angular": nk.angular,
+    "euclidean": nk.euclidean,
+    "sqeuclidean": nk.sqeuclidean,
+}
 
 
-def latency(func, A, B, iterations: int = 1, warmup: int = 0) -> float:
-    """Time the amount of time it takes to run a function and return the average time per run in seconds."""
-    while warmup > 0:
-        func(A, B)
-        warmup -= 1
-    start_time = time.time_ns()
-    while iterations > 0:
-        func(A, B)
-        iterations -= 1
-    end_time = time.time_ns()
-    return (end_time - start_time) / 1e9
+def _nk_pairwise(metric: str, a, b, dtype_str: str):
+    """Call the appropriate numkong pairwise function."""
+    func = _NK_METRIC_FUNC[metric]
+    if dtype_str in ("bf16",):
+        return func(a, b, nk.bfloat16)
+    return func(a, b)
 
 
-def yield_batch_results(
-    count_vectors_per_matrix: int,
-    ndim: int,
-    kernels: List[Kernel],
-    warmup: int = 0,
-    filter_pattern: Optional[re.Pattern] = None,
-) -> Generator[Result, None, None]:
-    # For each of the present data types, we may want to pre-generate several random matrices
-    count_matrices_per_dtype = 16
-    count_repetitions_per_matrix = 3  # This helps dampen the effect of time-measurement itself
-    matrices_per_dtype = {}
-    for kernel in kernels:
-        if kernel.dtype in matrices_per_dtype:
-            continue
-        matrices = [
-            random_matrix(count_vectors_per_matrix, ndim, kernel.dtype) for _ in range(count_matrices_per_dtype)
-        ]
-        if count_vectors_per_matrix == 1:
-            matrices = [m.flatten() for m in matrices]
-        matrices_per_dtype[kernel.dtype] = matrices
+def benchmark_numkong_pairwise(
+    metric: str, ndim: int, count: int, dtype_str: str, warmup: float, profile: float
+) -> BenchmarkResult:
+    matrices = [
+        random_matrix(count, ndim, dtype_str, seed=i) for i in range(NUM_MATRIX_PAIRS_)
+    ]
+    if count == 1:
+        matrices = [m.flatten() for m in matrices]
 
-    # For each kernel, repeat benchmarks for each data type
-    for kernel in kernels:
-        # Construct hierarchical benchmark name: similarity/{metric}/{dtype}
-        benchmark_name = f"similarity/{kernel.name}/{kernel.dtype}"
+    # Warm up to discover output dtype
+    sample = _nk_pairwise(metric, matrices[0], matrices[1], dtype_str)
+    out_dtype = normalize_dtype_name(getattr(sample, "dtype", "f32"))
 
-        # Check if this benchmark should run
-        if not utils.should_run_benchmark(benchmark_name, filter_pattern):
-            continue
+    def run():
+        for i in range(1, NUM_MATRIX_PAIRS_):
+            for _ in range(NUM_REPS_PER_PAIR_):
+                _nk_pairwise(metric, matrices[i - 1], matrices[i], dtype_str)
 
-        matrices_numpy = matrices_per_dtype[kernel.dtype]
-        matrices_converted = [kernel.tensor_type(m) for m in matrices_numpy]
-        baseline_one_to_one_func = (
-            kernel.baseline_one_to_one_func if count_vectors_per_matrix == 1 else kernel.baseline_many_to_many_func
-        )
-        nk_func = kernel.nk_func
-        result = Result(
-            kernel.dtype,
-            kernel.name,
-            baseline_seconds=0,
-            nk_seconds=0,
-            bytes_per_vector=matrices_numpy[0].nbytes // count_vectors_per_matrix,
-            distance_calculations=count_vectors_per_matrix * count_matrices_per_dtype * count_repetitions_per_matrix,
-        )
+    duration = measure_average_duration(run, warmup, profile)
+    total_calls = (NUM_MATRIX_PAIRS_ - 1) * NUM_REPS_PER_PAIR_
+    distance_calculations = count * total_calls
+    per_call = duration / total_calls
+    gso = (distance_calculations * ndim) / duration / 1e9
 
-        # Try obtaining the baseline measurements
-        try:
-            for i in range(1, count_matrices_per_dtype):
-                result.baseline_seconds += latency(
-                    baseline_one_to_one_func,
-                    matrices_converted[i - 1],
-                    matrices_converted[i],
-                    count_repetitions_per_matrix,
-                    warmup,
-                )
-        except NotImplementedError as e:
-            result.baseline_seconds = e
-        except ValueError as e:
-            result.baseline_seconds = e  #! This happens often during overflows
-        except RuntimeError as e:
-            result.baseline_seconds = e  #! This happens often during overflows
-        except Exception as e:
-            # This is an unexpected exception... once you face it, please report it
-            raise RuntimeError(str(e) + " for %s(%s)" % (kernel.name, str(kernel.dtype))) from e
-
-        # Try obtaining the NumKong measurements
-        try:
-            for i in range(1, count_matrices_per_dtype):
-                result.nk_seconds += latency(
-                    nk_func,
-                    matrices_numpy[i - 1],
-                    matrices_numpy[i],
-                    count_repetitions_per_matrix,
-                    warmup,
-                )
-        except NotImplementedError as e:
-            result.nk_seconds = e
-        except Exception as e:
-            # This is an unexpected exception... once you face it, please report it
-            raise RuntimeError(str(e) + " for %s(%s)" % (kernel.name, str(kernel.dtype))) from e
-
-        yield result
+    return BenchmarkResult(
+        library="NumKong",
+        metric=metric,
+        input_dtype=dtype_str,
+        output_dtype=out_dtype,
+        display_signature=display_signature(dtype_str, out_dtype),
+        ndim=ndim,
+        count=count,
+        duration_secs=per_call,
+        gso_per_sec=gso,
+    )
 
 
-def yield_all_pairs_results(
-    count_vectors_per_matrix: int,
-    ndim: int,
-    kernels: List[Kernel],
-    warmup: int = 0,
-    filter_pattern: Optional[re.Pattern] = None,
-) -> Generator[Result, None, None]:
-    # For each of the present data types, we may want to pre-generate several random matrices
-    count_matrices_per_dtype = 16
-    count_repetitions_per_matrix = 3  # This helps dampen the effect of time-measurement itself
-    matrices_per_dtype = {}
-    for kernel in kernels:
-        if kernel.dtype in matrices_per_dtype:
-            continue
-        matrices = [
-            random_matrix(count_vectors_per_matrix, ndim, kernel.dtype) for _ in range(count_matrices_per_dtype)
-        ]
-        matrices_per_dtype[kernel.dtype] = matrices
+def benchmark_scipy_pairwise(
+    metric: str, ndim: int, count: int, dtype_str: str, warmup: float, profile: float
+) -> BenchmarkResult:
+    import scipy.spatial.distance as spd
 
-    # For each kernel, repeat benchmarks for each data type
-    for kernel in kernels:
-        # Construct hierarchical benchmark name: similarity/{metric}/{dtype}
-        benchmark_name = f"similarity/{kernel.name}/{kernel.dtype}"
+    matrices = [
+        random_matrix(count, ndim, dtype_str, seed=i) for i in range(NUM_MATRIX_PAIRS_)
+    ]
+    if count == 1:
+        matrices = [m.flatten() for m in matrices]
 
-        # Check if this benchmark should run
-        if not utils.should_run_benchmark(benchmark_name, filter_pattern):
-            continue
+    scipy_metric_map = {
+        "angular": "cosine",
+        "euclidean": "euclidean",
+        "sqeuclidean": "sqeuclidean",
+    }
+    sp_metric = scipy_metric_map[metric]
 
-        matrices_numpy = matrices_per_dtype[kernel.dtype]
-        matrices_converted = [kernel.tensor_type(m) for m in matrices_numpy]
-        baseline_one_to_one_func = kernel.baseline_all_pairs_func
-        nk_func = kernel.nk_all_pairs_func
-        result = Result(
-            kernel.dtype,
-            kernel.name,
-            baseline_seconds=0,
-            nk_seconds=0,
-            bytes_per_vector=matrices_numpy[0].nbytes // count_vectors_per_matrix,
-            distance_calculations=(count_vectors_per_matrix**2)
-            * count_matrices_per_dtype
-            * count_repetitions_per_matrix,
-        )
+    def one_to_one(a, b):
+        return getattr(spd, sp_metric)(a, b)
 
-        # Try obtaining the baseline measurements
-        try:
-            for i in range(1, count_matrices_per_dtype):
-                result.baseline_seconds += latency(
-                    baseline_one_to_one_func,
-                    matrices_converted[i - 1],
-                    matrices_converted[i],
-                    count_repetitions_per_matrix,
-                    warmup,
-                )
-        except NotImplementedError as e:
-            result.baseline_seconds = e
-        except ValueError as e:
-            result.baseline_seconds = e  #! This happens often during overflows
-        except RuntimeError as e:
-            result.baseline_seconds = e  #! This happens often during overflows
-        except Exception as e:
-            # This is an unexpected exception... once you face it, please report it
-            raise RuntimeError(str(e) + " for %s(%s)" % (kernel.name, str(kernel.dtype))) from e
+    if count == 1:
+        call_fn = one_to_one
+    else:
 
-        # Try obtaining the NumKong measurements
-        try:
-            for i in range(1, count_matrices_per_dtype):
-                result.nk_seconds += latency(
-                    nk_func,
-                    matrices_numpy[i - 1],
-                    matrices_numpy[i],
-                    count_repetitions_per_matrix,
-                    warmup,
-                )
-        except NotImplementedError as e:
-            result.nk_seconds = e
-        except Exception as e:
-            # This is an unexpected exception... once you face it, please report it
-            raise RuntimeError(str(e) + " for %s(%s)" % (kernel.name, str(kernel.dtype))) from e
+        def call_fn(a, b):
+            for i in range(a.shape[0]):
+                getattr(spd, sp_metric)(a[i], b[i])
 
-        yield result
+    def run():
+        for i in range(1, NUM_MATRIX_PAIRS_):
+            for _ in range(NUM_REPS_PER_PAIR_):
+                call_fn(matrices[i - 1], matrices[i])
+
+    duration = measure_average_duration(run, warmup, profile)
+    total_calls = (NUM_MATRIX_PAIRS_ - 1) * NUM_REPS_PER_PAIR_
+    distance_calculations = count * total_calls
+    per_call = duration / total_calls
+    gso = (distance_calculations * ndim) / duration / 1e9
+
+    return BenchmarkResult(
+        library="SciPy",
+        metric=metric,
+        input_dtype=dtype_str,
+        output_dtype="f64",
+        display_signature=display_signature(dtype_str, "f64"),
+        ndim=ndim,
+        count=count,
+        duration_secs=per_call,
+        gso_per_sec=gso,
+    )
 
 
-def result_to_row(result: Result) -> List[str]:
-    dtype_cell = f"`{result.dtype}`"
-    name_cell = f"`{result.name}`"
-    baseline_cell = "💥"
-    nk_cell = "💥"
-    improvement_cell = "🤷"
+def benchmark_scipy_dot_pairwise(
+    ndim: int, count: int, dtype_str: str, warmup: float, profile: float
+) -> BenchmarkResult:
+    import scipy.linalg.blas as spb
 
-    if isinstance(result.baseline_seconds, float):
-        ops_per_second = result.distance_calculations / result.baseline_seconds
-        gbs_per_second = result.bytes_per_vector * ops_per_second / 1e9
-        baseline_cell = f"{ops_per_second:,.0f} ops/s, {gbs_per_second:,.3f} GB/s"
-    if isinstance(result.nk_seconds, float):
-        ops_per_second = result.distance_calculations / result.nk_seconds
-        gbs_per_second = result.bytes_per_vector * ops_per_second / 1e9
-        nk_cell = f"{ops_per_second:,.0f} ops/s, {gbs_per_second:,.3f} GB/s"
-    if isinstance(result.baseline_seconds, float) and isinstance(result.nk_seconds, float):
-        improvement_cell = f"{result.baseline_seconds / result.nk_seconds:,.2f} x"
+    matrices = [
+        random_matrix(count, ndim, dtype_str, seed=i) for i in range(NUM_MATRIX_PAIRS_)
+    ]
+    if count == 1:
+        matrices = [m.flatten() for m in matrices]
 
-    return [dtype_cell, name_cell, baseline_cell, nk_cell, improvement_cell]
+    if count == 1:
+        call_fn = spb.sdot
+    else:
+
+        def call_fn(a, b):
+            for i in range(a.shape[0]):
+                spb.sdot(a[i], b[i])
+
+    def run():
+        for i in range(1, NUM_MATRIX_PAIRS_):
+            for _ in range(NUM_REPS_PER_PAIR_):
+                call_fn(matrices[i - 1], matrices[i])
+
+    duration = measure_average_duration(run, warmup, profile)
+    total_calls = (NUM_MATRIX_PAIRS_ - 1) * NUM_REPS_PER_PAIR_
+    distance_calculations = count * total_calls
+    per_call = duration / total_calls
+    gso = (distance_calculations * ndim) / duration / 1e9
+
+    return BenchmarkResult(
+        library="SciPy",
+        metric="dot",
+        input_dtype=dtype_str,
+        output_dtype="f32",
+        display_signature=display_signature(dtype_str, "f32"),
+        ndim=ndim,
+        count=count,
+        duration_secs=per_call,
+        gso_per_sec=gso,
+    )
+
+
+def benchmark_numpy_dot_pairwise(
+    ndim: int, count: int, dtype_str: str, warmup: float, profile: float
+) -> BenchmarkResult:
+    matrices = [
+        random_matrix(count, ndim, dtype_str, seed=i) for i in range(NUM_MATRIX_PAIRS_)
+    ]
+    if count == 1:
+        matrices = [m.flatten() for m in matrices]
+
+    if count == 1:
+        call_fn = np.dot
+    else:
+
+        def call_fn(a, b):
+            np.sum(a * b, axis=1)
+
+    def run():
+        for i in range(1, NUM_MATRIX_PAIRS_):
+            for _ in range(NUM_REPS_PER_PAIR_):
+                call_fn(matrices[i - 1], matrices[i])
+
+    duration = measure_average_duration(run, warmup, profile)
+    total_calls = (NUM_MATRIX_PAIRS_ - 1) * NUM_REPS_PER_PAIR_
+    distance_calculations = count * total_calls
+    per_call = duration / total_calls
+    gso = (distance_calculations * ndim) / duration / 1e9
+
+    return BenchmarkResult(
+        library="NumPy",
+        metric="dot",
+        input_dtype=dtype_str,
+        output_dtype=dtype_str,
+        display_signature=display_signature(dtype_str, dtype_str),
+        ndim=ndim,
+        count=count,
+        duration_secs=per_call,
+        gso_per_sec=gso,
+    )
+
+
+CANDIDATES = [
+    # (library, metric, dtype)
+    ("numkong", "dot", "f32"),
+    ("numkong", "dot", "f64"),
+    ("numkong", "dot", "i8"),
+    ("numkong", "dot", "u8"),
+    ("numkong", "dot", "bf16"),
+    ("numkong", "angular", "f32"),
+    ("numkong", "angular", "f64"),
+    ("numkong", "angular", "i8"),
+    ("numkong", "angular", "u8"),
+    ("numkong", "angular", "bf16"),
+    ("numkong", "euclidean", "f32"),
+    ("numkong", "euclidean", "f64"),
+    ("numkong", "euclidean", "i8"),
+    ("numkong", "euclidean", "u8"),
+    ("numkong", "euclidean", "bf16"),
+    ("numkong", "sqeuclidean", "f32"),
+    ("numkong", "sqeuclidean", "f64"),
+    ("numkong", "sqeuclidean", "i8"),
+    ("numkong", "sqeuclidean", "u8"),
+    ("numkong", "sqeuclidean", "bf16"),
+    ("scipy", "dot", "f32"),
+    ("scipy", "angular", "f32"),
+    ("scipy", "euclidean", "f32"),
+    ("scipy", "sqeuclidean", "f32"),
+    ("numpy", "dot", "f32"),
+    ("numpy", "dot", "f64"),
+]
+
+
+def result_to_entry(result: BenchmarkResult) -> dict:
+    return {
+        "suite": "similarity",
+        "workload": result.metric,
+        "benchmark_id": f"similarity/{result.metric}/{result.input_dtype}/{result.library.lower()}",
+        "library": result.library,
+        "metric": result.metric,
+        "dtype": result.input_dtype,
+        "input_dtype": result.input_dtype,
+        "output_dtype": result.output_dtype,
+        "display_signature": result.display_signature,
+        "ndim": result.ndim,
+        "count": result.count,
+        "primary_value": result.gso_per_sec,
+        "unit": "GSO/s",
+        "duration_secs": result.duration_secs,
+    }
 
 
 def main():
-    # Argument parsing
-    parser = argparse.ArgumentParser(description="Benchmark NumKong and other libraries")
+    parser = argparse.ArgumentParser(
+        description="Benchmark pairwise similarity: NumKong vs NumPy vs SciPy",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    add_common_args(parser)
     parser.add_argument(
         "--ndim",
         type=int,
-        default=1536,
-        help="""
-            Number of dimensions in vectors (default: 1536)
-                        
-            For binary vectors (e.g., Hamming, Jaccard), this is the number of bits.
-            In case of NumKong, the inputs will be treated at the bit-level.
-            Other packages will be matching/comparing 8-bit integers.
-            The volume of exchanged data will be identical, but the results will differ.
-            """,
+        default=get_vector_dims(),
+        help="Number of vector dimensions (default: from NUMWARS_DIMS or 2048)",
     )
     parser.add_argument(
         "-n",
         "--count",
         type=int,
         default=1,
-        help="""
-            Number of vectors per batch (default: 1)
-
-            By default, when set to 1 the latency will generate many vectors of size (ndim, )
-            and call the functions on pairs of single vectors: both directly, and through `cdist`.
-            Alternatively, for larger batch sizes the latency will generate two matrices of
-            size (n, ndim) and compute:
-
-            - batch mode: (n) distances between vectors in identical rows of the two matrices,
-            - all-pairs mode: (n²) distances between all pairs of vectors in the two matrices via `cdist`.
-            """,
+        help="Number of vectors per batch (default: 1)",
     )
     parser.add_argument(
-        "--mode",
-        choices=["batch", "all-pairs"],
-        default="batch",
-        help="""Choose between 'batch' and 'all-pairs' mode (default: batch)
-        
-        In 'batch' mode, the latency will generate two matrices of size (n, ndim)
-        and compute (n) distances between vectors in identical rows of the two matrices.
-        In 'all-pairs' mode, the latency will generate two matrices of size (n, ndim)
-        and compute (n²) distances between all pairs of vectors in the two matrices via `cdist`.
-        """,
+        "--scipy",
+        action="store_true",
+        help="Include SciPy benchmarks (must be installed)",
     )
     parser.add_argument(
-        "-k",
-        "--filter",
-        metavar="REGEX",
-        default=utils.get_env("NUMWARS_FILTER"),
-        help="Regex to filter which benchmarks to run (or set NUMWARS_FILTER env var). "
-             "Examples: --filter 'f32' (only f32 dtypes), --filter 'angular|dot' (specific metrics)",
-    )
-    parser.add_argument("--scipy", action="store_true", help="Profile SciPy, must be installed")
-    parser.add_argument("--scikit", action="store_true", help="Profile scikit-learn, must be installed")
-    parser.add_argument("--torch", action="store_true", help="Profile PyTorch, must be installed")
-    parser.add_argument("--tf", action="store_true", help="Profile TensorFlow, must be installed")
-    parser.add_argument("--jax", action="store_true", help="Profile JAX, must be installed")
-    parser.add_argument(
-        "--time-limit",
-        type=float,
-        default=1.0,
-        help="Maximum time in seconds to run each latency (default: 1.0)",
-    )
-    parser.add_argument(
-        "--warmup",
-        type=int,
-        default=0,
-        help="""
-        Number of warm-up runs before timing (default: 0)
-        
-        This will greatly affect the results for all heavy libraries relying on JIT compilation
-        or lazy computational graphs (e.g., TensorFlow, PyTorch, JAX).
-        """,
+        "--output-format",
+        choices=["table", "json"],
+        default="table",
+        help="Output format (default: table)",
     )
     args = parser.parse_args()
-    assert args.count > 0, "Number of vectors per batch must be greater than 0"
-    assert args.ndim > 0, "Number of dimensions must be greater than 0"
 
-    count = args.count
     ndim = args.ndim
+    count = args.count
 
-    # Always run all combinations - filtering is done via should_run_benchmark()
-    dtypes_profiled = set(dtype_names)
-    metric_families_profiled = set(metric_families)
+    assert ndim > 0, "Vector dimensions must be > 0"
+    assert count > 0, "Count must be > 0"
 
-    # Compile filter pattern if provided
     filter_pattern = None
     if args.filter:
         try:
             filter_pattern = re.compile(args.filter)
         except re.error as e:
             print(f"Warning: Invalid regex pattern '{args.filter}': {e}")
-            filter_pattern = None
 
-    print("# Benchmarking NumKong")
-    print("- Vector dimensions:", ndim)
-    print("- Vectors count:", count)
-    print("- Metrics:", ", ".join(metric_families_profiled))
-    print("- Datatypes:", ", ".join(dtypes_profiled))
-    try:
-        caps = [cap for cap, enabled in nk.get_capabilities().items() if enabled]
-        print("- Hardware capabilities:", ", ".join(caps))
+    metadata = {
+        "ndim": ndim,
+        "count": count,
+        "numkong_version": getattr(nk, "__version__", None),
+        "numpy_version": np.__version__,
+    }
 
-        # Log versions of NumKong, NumPy, SciPy, and scikit-learn
-        print(f"- NumKong version: {nk.__version__}")
-        print(f"- NumPy version: {np.__version__}")
+    all_results: List[BenchmarkResult] = []
+    for library, metric, dtype_str in CANDIDATES:
+        if library == "scipy" and not args.scipy:
+            continue
 
-        if args.scipy:
-            import scipy as sp
+        benchmark_name = f"similarity/{metric}/{dtype_str}"
+        if not should_run_benchmark(benchmark_name, filter_pattern):
+            continue
 
-            print(f"- SciPy version: {sp.__version__}")
-        if args.scikit:
-            import sklearn as sk
+        if args.output_format == "table":
+            print(f"Benchmarking {library}/{metric}/{dtype_str}")
 
-            print(f"- scikit-learn version: {sk.__version__}")
-        if args.torch:
-            import torch
+        try:
+            if library == "numkong":
+                result = benchmark_numkong_pairwise(
+                    metric, ndim, count, dtype_str, args.warmup, args.time_limit
+                )
+            elif library == "scipy" and metric == "dot":
+                result = benchmark_scipy_dot_pairwise(
+                    ndim, count, dtype_str, args.warmup, args.time_limit
+                )
+            elif library == "scipy":
+                result = benchmark_scipy_pairwise(
+                    metric, ndim, count, dtype_str, args.warmup, args.time_limit
+                )
+            elif library == "numpy":
+                result = benchmark_numpy_dot_pairwise(
+                    ndim, count, dtype_str, args.warmup, args.time_limit
+                )
+            else:
+                continue
 
-            print(f"- PyTorch version: {torch.__version__}")
-        if args.tf:
-            import tensorflow as tf
+            all_results.append(result)
+        except Exception as e:
+            print(f"  Error: {e}")
 
-            print(f"- TensorFlow version: {tf.__version__}")
-        if args.jax:
-            import jax
-
-            print(f"- JAX version: {jax.__version__}")
-
-        deps: dict = np.show_config(mode="dicts").get("Build Dependencies")
-        print("-- NumPy BLAS dependency:", deps["blas"]["name"])
-        print("-- NumPy LAPACK dependency:", deps["lapack"]["name"])
-    except Exception as e:
-        print(f"An error occurred: {e}")
-
-    kernels: List[Kernel] = list(
-        yield_kernels(
-            metric_families_profiled,
-            dtypes_profiled,
-            include_scipy=args.scipy,
-            include_scikit=args.scikit,
-            include_torch=args.torch,
-            include_tf=args.tf,
-            include_jax=args.jax,
+    if args.output_format == "json":
+        print(
+            json.dumps(
+                {
+                    "suite": "similarity",
+                    "settings": metadata,
+                    "results": [result_to_entry(r) for r in all_results],
+                },
+                indent=2,
+            )
         )
-    )
+        return
 
-    results: Generator[Result, None, None] = []
-    if args.mode == "batch":
-        print("## Between Vectors in Two Matrices, Batch Size: {:,}".format(count))
-        results = yield_batch_results(count, ndim, kernels, warmup=args.warmup, filter_pattern=filter_pattern)
-    else:
-        print("## Between All Pairs of Vectors (`cdist`), Batch Size: {:,}".format(count))
-        results = yield_all_pairs_results(count, ndim, kernels, warmup=args.warmup, filter_pattern=filter_pattern)
+    if not all_results:
+        print("No benchmarks were run.")
+        return
 
-    columns_headers = ["Data Type", "Method", "Baseline", "NumKong", "Improvement"]
-    results_rows = []
-    for result in results:
-        result_row = result_to_row(result)
-        results_rows.append(result_row)
+    print()
+    print(f"Similarity benchmarks: ndim={ndim}, count={count}")
+    print()
 
-    print(tabulate.tabulate(results_rows, headers=columns_headers))
+    table_rows = [
+        {
+            "Library": r.library,
+            "Metric": r.metric,
+            "Precision": r.display_signature,
+            "GSO/s": f"{r.gso_per_sec:.2f}",
+            "Time": format_duration(r.duration_secs),
+        }
+        for r in all_results
+    ]
+    print_results_table(table_rows)
 
 
 if __name__ == "__main__":
