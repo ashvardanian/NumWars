@@ -160,65 +160,81 @@ See [similarities/README.md](similarities/README.md) for details.
 
 ### Elementwise Operations
 
-Bandwidth-sensitive elementwise kernels — add, multiply, FMA — over 2048 elements.
-FMA shown as representative sample.
+Bandwidth-sensitive elementwise kernels — add and scale — over 1,000,000 elements.
+Sum shown as representative sample.
 In Rust:
 
 ```text
-numkong::fma f32 → f32                ████████████████████████████████████████ 121.56 GB/s
-scalar fma loop f32 → f32             █████████████████████████████████████▎   112.96 GB/s
-ndarray fused multiply-add f32 → f32  ██████████████                            42.30 GB/s
-numkong::fma f16 → f16                ███████▌                                  22.51 GB/s
-numkong::fma bf16 → bf16              ██████▌                                   19.47 GB/s
+NumKong:
+numkong::EachSum i8 → i8      █████████████████████████████████████████████     23.23 GB/s
+numkong::EachSum f16 → f16    ██████████████████████████████████████▌           19.93 GB/s
+numkong::EachSum bf16 → bf16  ████████████████████████████████████▉             19.08 GB/s
+numkong::EachSum f32 → f32    ████████████████████████████████████▎             18.73 GB/s
+
+Alternatives:
+serial code f32 → f32         ██████████████████████████████████████▍           19.86 GB/s
+nalgebra::add f32 → f32       ██████████████████████████████████████▍           19.82 GB/s
+ndarray::add f32 → f32        ██████████████████████████████████████▎           19.79 GB/s
 ```
 
 In Python:
 
 ```text
-numkong.fma f32 → f32                 ██████████████████████████████████████████ 1.24 GB/s
-numkong.fma f16 → f16                 ████████████████████                       0.59 GB/s
-numpy fma-style expression f32 → f32  ██████████                                 0.30 GB/s
-numkong.fma bf16 → bf16               ██▏                                        0.06 GB/s
-numpy fma-style expression f16 → f16  ▎                                          0.01 GB/s
+NumKong:
+numkong.add i8 → i8      █████████████████████████████████████████▋             30.91 GB/s
+numkong.add f32 → f32    ███████████████████████████████████████▋               29.39 GB/s
+numkong.add f16 → f16    ██████████████████████████████████████▉                28.84 GB/s
+numkong.add f64 → f64    ██████████████████████████████████████▉                28.79 GB/s
+numkong.add bf16 → bf16  █████████████████████████████████████▍                 27.72 GB/s
+
+Alternatives:
+numpy.add i8 → i8        █████████████████████████████████████████████          33.32 GB/s
+numpy.add f32 → f32      ██████████████████████████████████▋                    25.65 GB/s
+numpy.add f64 → f64      █████████████████████████████████▊                     25.03 GB/s
+numpy.add f16 → f16      █▎                                                      0.95 GB/s
 ```
 
 See [each/README.md](each/README.md) for details.
 
 ### Reductions
 
-Horizontal reductions over 1,000,000 _f32_ elements.
-The full suite covers sum, norm, min/max, argmin/argmax, moments, minmax, and row_norms.
-Sum and row-wise L2 norms shown as representative samples.
+Horizontal reductions over 1,000,000 elements.
+The suite covers sum and row-wise L2 norms.
 In Rust:
 
 ```text
-ndarray::ArrayBase::sum f32 → f32            ██████████████████████████████████ 28.96 GB/s
-numkong::reduce_moments().sum f32 → f64      ████████████████████████████████▌  27.78 GB/s
-polars::ChunkedArray::sum f32 → Option<f32>  ████████████████████████████████▏  27.52 GB/s
-scalar sum loop f32 → f32                    ██████▊                             5.89 GB/s
+ndarray::ArrayBase::sum f32 → f32        █████████████████████████████████████████████ 32.50 GB/s
+polars::ChunkedArray::sum f32 → f32      ███████████████████████████████████████████▎ 31.26 GB/s
+numkong::reduce_moments().sum f32 → f64  █████████████████████████████████████████▋ 30.09 GB/s
+serial sum loop f32 → f32                ████████▊                               6.38 GB/s
 ```
 
-Row-wise L2 norms over a 1000x2048 _f32_ matrix:
+Row-wise L2 norms over a 2048×2048 matrix:
 
 ```text
-ndarray row norms f32 → f32       █████████████████████████████████████████████ 24.79 GB/s
-numkong::Dot self-dot + sqrt f32  █████████████████████████████████████▍        20.68 GB/s
-scalar row norms loop f32 → f32   ███████████▎                                   6.08 GB/s
+ndarray row norms f64 → f64              █████████████████████████████████████████████ 27.11 GB/s
+numkong::Dot self-dot + sqrt bf16 → f32  ████████████████████████████████████████▌ 24.46 GB/s
+ndarray row norms f32 → f32              ███████████████████████████████████▉   21.63 GB/s
+numkong::Dot self-dot + sqrt f32         █████████████████████████████████▏     20.01 GB/s
+serial row norms loop f32 → f32          ██████████▊                             6.54 GB/s
 ```
 
 In Python over 1,000,000 elements:
 
 ```text
-numkong.sum i8 → i8    ████████████████████████████████████████████████████████ 30.87 GB/s
-numkong.sum f32 → f32  █████████████████████████████████████████████████████▌   29.62 GB/s
-numkong.norm f32       ██████████████████████████████████████████████▎          25.56 GB/s
-numpy.sum f64 → f64    █████████████████████████████████████████████▉           25.24 GB/s
-numkong.sum f64 → f64  █████████████████████████████████████▏                   20.37 GB/s
-numpy.sum f32 → f32    ███████████████████████████████████                      19.33 GB/s
-numkong.norm f64       ██████████████████████████████████▎                      18.82 GB/s
-numpy.linalg.norm f64  ██████████████▍                                           7.92 GB/s
-numpy.linalg.norm f32  ███████████▉                                              6.64 GB/s
-numpy.sum i8 → i8      █████▎                                                    2.83 GB/s
+NumKong:
+numkong.sum i8 → i8          █████████████████████████████████████████████      32.02 GB/s
+numkong.sum f32 → f32        ████████████████████████████████████████▉          29.17 GB/s
+numkong.norm f32 → f64       ███████████████████████████████▎                   22.32 GB/s
+numkong.sum f64 → f64        █████████████████████████████                      20.68 GB/s
+numkong.norm bf16 → f64      █████████████████████████                          17.82 GB/s
+
+Alternatives:
+numpy.sum f64 → f64          █████████████████████████████████▉                 24.16 GB/s
+numpy.sum f32 → f32          ██████████████████████████▊                        19.06 GB/s
+numpy.linalg.norm f64 → f64  ███████████▌                                        8.21 GB/s
+numpy.linalg.norm f32 → f64  ██████████▌                                         7.48 GB/s
+numpy.sum i8 → i8            ███▊                                                2.68 GB/s
 ```
 
 See [reduce/README.md](reduce/README.md) for details.
@@ -281,19 +297,25 @@ The labels include the full return signature so _RMSD_ and _Kabsch_ can share on
 In Rust:
 
 ```text
+NumKong:
 numkong::MeshAlignment::rmsd f32 → f64    ████████████████████████████████████ 610.32 MP/s
 numkong::MeshAlignment::kabsch f32 → f64  ██████████████████████               372.86 MP/s
-nalgebra RMSD solve f32 → f32             ███████████▊                         199.14 MP/s
-nalgebra Kabsch solve f32 → f64           ███████▍                             125.14 MP/s
+
+Reimplmenting with alternatives:
+nalgebra-based RMSD f32 → f32             ███████████▊                         199.14 MP/s
+nalgebra-based Kabsch f32 → f64           ███████▍                             125.14 MP/s
 ```
 
 Compared to Python and its alternatives:
 
 ```text
+NumKong:
 numkong.rmsd f32 → f64                           █████████████████████████████ 468.79 MP/s
 numkong.kabsch f32 → f64                         ████████████████▏             260.75 MP/s
 numkong.umeyama f32 → f64                        ███████████████               245.37 MP/s
-numpy rmsd f32 → f64                             ███▏                           51.06 MP/s
+
+Alternatives:
+numpy-based RMSD f32 → f64                       ███▏                           51.06 MP/s
 scipy Rotation.align_vectors (Kabsch) f32 → f64  ▊                              13.51 MP/s
 biopython SVDSuperimposer (Kabsch) f32 → f64                                     1.32 MP/s
 ```

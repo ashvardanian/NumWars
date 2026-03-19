@@ -3,7 +3,7 @@
 """
 Elementwise operation benchmarks: NumKong vs NumPy.
 
-Benchmarks add, multiply, and fma operations across multiple data types.
+Benchmarks add operations across multiple data types.
 
 Can be run with uv:
     uv run --with numkong,numpy,tabulate,ml_dtypes each/bench.py
@@ -145,108 +145,6 @@ def benchmark_numpy_add(
     )
 
 
-def benchmark_numkong_multiply(
-    elements: int, dtype_str: str, warmup: float, profile: float, seed: int = 42,
-) -> BenchmarkResult:
-    a = build_array(elements, dtype_str, seed)
-    b = build_array(elements, dtype_str, seed + 1)
-
-    if dtype_str == "bf16":
-        func = lambda: nk.multiply(a, b, a_dtype="bfloat16", b_dtype="bfloat16", out_dtype="bfloat16")
-    else:
-        func = lambda: nk.multiply(a, b)
-
-    duration = measure_average_duration(func, warmup, profile)
-    itemsize = dtype_itemsize(dtype_str)
-    bytes_processed = 2 * elements * itemsize + elements * itemsize
-    return BenchmarkResult(
-        library="NumKong",
-        operation="multiply",
-        input_dtype=dtype_str,
-        output_dtype=dtype_str,
-        display_signature=display_signature(dtype_str, dtype_str),
-        elements=elements,
-        duration_secs=duration,
-        throughput_gbs=bytes_processed / duration / 1e9,
-    )
-
-
-def benchmark_numpy_multiply(
-    elements: int, dtype_str: str, warmup: float, profile: float, seed: int = 42,
-) -> BenchmarkResult:
-    a = build_array(elements, dtype_str, seed)
-    b = build_array(elements, dtype_str, seed + 1)
-    out = np.empty_like(a)
-
-    func = lambda: np.multiply(a, b, out=out)
-
-    duration = measure_average_duration(func, warmup, profile)
-    itemsize = dtype_itemsize(dtype_str)
-    bytes_processed = 2 * elements * itemsize + elements * itemsize
-    return BenchmarkResult(
-        library="NumPy",
-        operation="multiply",
-        input_dtype=dtype_str,
-        output_dtype=dtype_str,
-        display_signature=display_signature(dtype_str, dtype_str),
-        elements=elements,
-        duration_secs=duration,
-        throughput_gbs=bytes_processed / duration / 1e9,
-    )
-
-
-def benchmark_numkong_fma(
-    elements: int, dtype_str: str, warmup: float, profile: float, seed: int = 42,
-) -> BenchmarkResult:
-    a = build_array(elements, dtype_str, seed)
-    b = build_array(elements, dtype_str, seed + 1)
-    c = build_array(elements, dtype_str, seed + 2)
-
-    if dtype_str == "bf16":
-        func = lambda: nk.fma(a, b, c, dtype="bfloat16", alpha=1.5, beta=2.5)
-    else:
-        func = lambda: nk.fma(a, b, c, alpha=1.5, beta=2.5)
-
-    duration = measure_average_duration(func, warmup, profile)
-    itemsize = dtype_itemsize(dtype_str)
-    bytes_processed = 3 * elements * itemsize + elements * itemsize
-    return BenchmarkResult(
-        library="NumKong",
-        operation="fma",
-        input_dtype=dtype_str,
-        output_dtype=dtype_str,
-        display_signature=display_signature(dtype_str, dtype_str),
-        elements=elements,
-        duration_secs=duration,
-        throughput_gbs=bytes_processed / duration / 1e9,
-    )
-
-
-def benchmark_numpy_fma(
-    elements: int, dtype_str: str, warmup: float, profile: float, seed: int = 42,
-) -> BenchmarkResult:
-    a = build_array(elements, dtype_str, seed)
-    b = build_array(elements, dtype_str, seed + 1)
-    c = build_array(elements, dtype_str, seed + 2)
-
-    func = lambda: 1.5 * a * b + 2.5 * c
-
-    duration = measure_average_duration(func, warmup, profile)
-    itemsize = dtype_itemsize(dtype_str)
-    bytes_processed = 3 * elements * itemsize + elements * itemsize
-    return BenchmarkResult(
-        library="NumPy",
-        operation="fma",
-        input_dtype=dtype_str,
-        output_dtype=dtype_str,
-        display_signature=display_signature(dtype_str, dtype_str),
-        elements=elements,
-        duration_secs=duration,
-        throughput_gbs=bytes_processed / duration / 1e9,
-    )
-
-
-
 candidates = [
     # add
     ("numkong", "add", "f32"),
@@ -258,33 +156,11 @@ candidates = [
     ("numpy", "add", "f64"),
     ("numpy", "add", "f16"),
     ("numpy", "add", "i8"),
-    # multiply
-    ("numkong", "multiply", "f32"),
-    ("numkong", "multiply", "f64"),
-    ("numkong", "multiply", "f16"),
-    ("numkong", "multiply", "bf16"),
-    ("numkong", "multiply", "i8"),
-    ("numpy", "multiply", "f32"),
-    ("numpy", "multiply", "f64"),
-    ("numpy", "multiply", "f16"),
-    ("numpy", "multiply", "i8"),
-    # fma
-    ("numkong", "fma", "f32"),
-    ("numkong", "fma", "f64"),
-    ("numkong", "fma", "f16"),
-    ("numkong", "fma", "bf16"),
-    ("numpy", "fma", "f32"),
-    ("numpy", "fma", "f64"),
-    ("numpy", "fma", "f16"),
 ]
 
 dispatch = {
     ("numkong", "add"): benchmark_numkong_add,
     ("numpy", "add"): benchmark_numpy_add,
-    ("numkong", "multiply"): benchmark_numkong_multiply,
-    ("numpy", "multiply"): benchmark_numpy_multiply,
-    ("numkong", "fma"): benchmark_numkong_fma,
-    ("numpy", "fma"): benchmark_numpy_fma,
 }
 
 

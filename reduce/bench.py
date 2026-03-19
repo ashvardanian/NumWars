@@ -3,7 +3,7 @@
 """
 Reduction benchmarks: NumKong vs NumPy.
 
-Covers flat-vector sum, min, max, argmin, argmax and row-wise L2 norms.
+Covers flat-vector sum and row-wise L2 norms.
 
 Can be run with uv:
     uv run --with numkong,numpy,tabulate reduce/bench.py
@@ -126,14 +126,6 @@ def benchmark_numpy(
         x = build_vector(elements, dtype_str, seed)
         if op == "sum":
             func = lambda: np.sum(x)
-        elif op == "min":
-            func = lambda: np.min(x)
-        elif op == "max":
-            func = lambda: np.max(x)
-        elif op == "argmin":
-            func = lambda: np.argmin(x)
-        elif op == "argmax":
-            func = lambda: np.argmax(x)
         else:
             raise ValueError(f"Unknown operation: {op}")
         bytes_processed = actual_elements * x.itemsize
@@ -141,9 +133,7 @@ def benchmark_numpy(
     duration = measure_average_duration(func, warmup, profile)
     throughput_gbs = bytes_processed / duration / 1e9 if duration > 0 else 0.0
     output_dtype = dtype_str
-    if op in ("argmin", "argmax"):
-        output_dtype = "i64"
-    elif op == "norm":
+    if op == "norm":
         output_dtype = "f64"
 
     return BenchmarkResult(
@@ -177,14 +167,6 @@ def benchmark_numkong(
         if op == "sum":
             t = nk.Tensor(x)
             func = lambda: nk.sum(t)
-        elif op == "min":
-            func = lambda: nk.min(x)
-        elif op == "max":
-            func = lambda: nk.max(x)
-        elif op == "argmin":
-            func = lambda: nk.argmin(x)
-        elif op == "argmax":
-            func = lambda: nk.argmax(x)
         else:
             raise ValueError(f"Unknown operation: {op}")
         bytes_processed = actual_elements * x.itemsize
@@ -192,9 +174,7 @@ def benchmark_numkong(
     duration = measure_average_duration(func, warmup, profile)
     throughput_gbs = bytes_processed / duration / 1e9 if duration > 0 else 0.0
     output_dtype = dtype_str
-    if op in ("argmin", "argmax"):
-        output_dtype = "i64"
-    elif op == "norm":
+    if op == "norm":
         output_dtype = "f64"
 
     return BenchmarkResult(
@@ -263,37 +243,17 @@ def main():
         ("numpy", "sum", "f32"),
         ("numpy", "sum", "f64"),
         ("numpy", "sum", "i8"),
+        ("numpy", "sum", "u8"),
         ("numkong", "sum", "f32"),
         ("numkong", "sum", "f64"),
         ("numkong", "sum", "i8"),
+        ("numkong", "sum", "u8"),
+        ("numkong", "sum", "bf16"),
         ("numpy", "norm", "f32"),
         ("numpy", "norm", "f64"),
         ("numkong", "norm", "f32"),
         ("numkong", "norm", "f64"),
-        ("numpy", "min", "f32"),
-        ("numpy", "min", "f64"),
-        ("numpy", "min", "i8"),
-        ("numkong", "min", "f32"),
-        ("numkong", "min", "f64"),
-        ("numkong", "min", "i8"),
-        ("numpy", "max", "f32"),
-        ("numpy", "max", "f64"),
-        ("numpy", "max", "i8"),
-        ("numkong", "max", "f32"),
-        ("numkong", "max", "f64"),
-        ("numkong", "max", "i8"),
-        ("numpy", "argmin", "f32"),
-        ("numpy", "argmin", "f64"),
-        ("numpy", "argmin", "i8"),
-        ("numkong", "argmin", "f32"),
-        ("numkong", "argmin", "f64"),
-        ("numkong", "argmin", "i8"),
-        ("numpy", "argmax", "f32"),
-        ("numpy", "argmax", "f64"),
-        ("numpy", "argmax", "i8"),
-        ("numkong", "argmax", "f32"),
-        ("numkong", "argmax", "f64"),
-        ("numkong", "argmax", "i8"),
+        ("numkong", "norm", "bf16"),
     ]
 
     all_results: List[BenchmarkResult] = []
