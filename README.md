@@ -1,434 +1,303 @@
 # NumWars
 
-__Mixed-precision numerical operations benchmarks: NumKong vs. the competition__
+## Numerical Computing on CPUs, in Python & Rust
 
-A comprehensive benchmarking suite comparing [NumKong](https://github.com/ashvardanian/SimSIMD) (formerly SimSIMD) against standard implementations for numerical operations across Rust and Python. Tests cover similarity metrics, elementwise operations, and matrix multiplication with support for exotic ML data types.
+![NumWars banner](https://github.com/ashvardanian/ashvardanian/blob/master/repositories/NumWars-v1.png?raw=true)
 
-## Overview
+There are many strong libraries for numerical computing.
+Most of them are written in C, C++, and Fortran, with excellent Rust wrappers and Python bindings on top.
 
-NumWars provides production-grade benchmarks for three categories of numerical operations:
+Where Rust is especially convenient is dependency management and reproducible benchmarking, making it a good place to line up apples-to-apples comparisons across native crates and their Python bindings.
+NumWars exists for the same reason StringWars exists for StringZilla: to compare [NumKong](https://github.com/ashvardanian/NumKong) against mainstream CPU stacks on the workloads it was built for, including:
 
-1. __[similarity/](similarity/)__ - Pairwise vector similarity/distance metrics
-2. __[each/](each/)__ - Elementwise tensor operations
-3. __[dots/](dots/)__ - Matrix multiplication (GEMM)
+- [`ndarray`](https://github.com/rust-ndarray/ndarray) and [`nalgebra`](https://github.com/dimforge/nalgebra) for dense tensor and linear algebra kernels.
+- [`faer`](https://github.com/sarah-quinones/faer-rs) and [`matrixmultiply`](https://github.com/bluss/matrixmultiply) for GEMM-like Rust baselines.
+- [`geo`](https://github.com/georust/geo) for geographic distances.
+- [`polars`](https://github.com/pola-rs/polars) and reduction-heavy analytics workloads.
+- [`NumPy`](https://github.com/numpy/numpy), [`SciPy`](https://github.com/scipy/scipy), and [`scikit-learn`](https://github.com/scikit-learn/scikit-learn) on Python.
 
-Each module includes both Rust and Python implementations, detailed documentation, and environment-variable-based configuration.
+Of course, the APIs and internal kernels of those projects are different.
+So this repository focuses on the workload families NumKong was designed for and compares their effective throughput using the native unit for each operation family instead of forcing everything into fake global `ops/s`.
 
-## Features
+> [!IMPORTANT]
+> The numbers below are reference measurements collected on Intel Sapphire Rapids CPU in single-threaded mode.
+> They will vary with CPU model, compiler flags, BLAS backend, and problem size.
+> Rebuild and rerun on your own hardware before treating them as absolute.
 
-- __Comprehensive Coverage__: 3 benchmark modules, 15+ operations, 10+ data types
-- __Both Languages__: Rust (Criterion) and Python implementations
-- __Exotic Types__: Support for fp16, bf16, int8, int4, float8 (e4m3, e5m2)
-- __Flexible Configuration__: Environment variables for fine-grained control
-- __Multiple Competitors__: Compare against NumPy, SciPy, PyTorch, ndarray, BLAS, and more
-- __Professional Infrastructure__: Modular design following StringWars patterns
+## Benchmarks at a Glance
 
-## Quick Start
+### Packed Matrix Multiplication
 
-### Installation
+NumKong packed dots are mixed-precision by design.
+_i8_ inputs produce _i32_ outputs.
+_bf16_ and _f16_ inputs produce _f32_ outputs.
+_f32_ inputs produce _f64_ outputs.
+The mainstream baselines shown here keep _f32 → f32_.
+Compared to Rust projects, it means:
 
-#### Rust
-
-```bash
-# Clone the repository
-git clone https://github.com/ashvardanian/NumWars.git
-cd NumWars
-
-# Run similarity benchmarks
-cargo bench --features bench_similarity --bench bench_similarity
-
-# Run all benchmarks
-cargo bench --all-features
+```text
+numkong::Tensor::dots_packed i8 → i32    ████████████████████ 1,357.36 GSO/s
+numkong::Tensor::dots_packed bf16 → f32  ██████████▏            684.96 GSO/s
+numkong::Tensor::dots_packed f16 → f32   █▋                     106.63 GSO/s
+faer::linalg::matmul::matmul f32 → f32   █▎                      81.21 GSO/s
+matrixmultiply::sgemm f32 → f32          █▏                      78.61 GSO/s
+ndarray::ArrayBase::dot f32 → f32        █▏                      78.55 GSO/s
+nalgebra::DMatrix × DMatrixᵀ f32 → f32   █▏                      74.21 GSO/s
+numkong::Tensor::dots_packed f32 → f64   ▋                       42.04 GSO/s
 ```
 
-#### Python
+Compared to Python:
 
-```bash
-# Install core dependencies
-pip install -r requirements.txt
-
-# Or install specific modules
-pip install -e ".[similarity]"  # Just similarity benchmarks
-pip install -e ".[all]"         # Everything including PyTorch, JAX, TF
-
-# Run similarity benchmarks
-python similarity/bench.py
-
-# Run elementwise benchmarks
-python each/bench.py
-
-# Run GEMM benchmarks
-python dots/bench.py
-```
-
-## Benchmark Modules
-
-### 1. Similarity (`similarity/`)
-
-Pairwise vector distance and similarity metrics.
-
-__Metrics:__
-- __Spatial__: dot, angular, euclidean, sqeuclidean
-- __Binary__: hamming, jaccard
-- __Probability__: jensen-shannon, kullback-leibler
-
-__Data types__: f64, f32, f16, bf16, e4m3, e5m2, i8, i4, u8, u4
-
-__Quick start:__
-```bash
-# Rust - run all benchmarks
-cargo bench --features bench_similarity
-
-# Rust - filter to specific benchmarks
-NUMWARS_FILTER="f32" cargo bench --features bench_similarity
-
-# Python - run all benchmarks
-python similarity/bench.py
-
-# Python - filter to specific metrics/types
-NUMWARS_FILTER="angular.*f32" python similarity/bench.py
-```
-
-See [similarity/README.md](similarity/README.md) for details.
-
-### 2. Elementwise Operations (`each/`)
-
-Component-wise tensor operations.
-
-__Operations:__
-- __Basic__: add, subtract, multiply, divide
-- __Scaling__: scalar multiply/divide
-- __Combined__: weighted sum (αA + βB), fused multiply-add
-
-__Data types__: f64, f32, f16, bf16, e4m3, e5m2, i8-i64, u8-u64, i4, u4
-
-__Quick start:__
-```bash
-# Rust - run all benchmarks
-cargo bench --features bench_each
-
-# Rust - configure tensor size and filter
-NUMWARS_DIMS=2000000 NUMWARS_FILTER="add" cargo bench --features bench_each
-
-# Python
-python each/bench.py
-```
-
-See [each/README.md](each/README.md) for details.
-
-### 3. Matrix Multiplication (`dots/`)
-
-GEMM (General Matrix Multiply) operations computing C = A @ B.T.
-
-__Layouts__: NT (No-Transpose × Transpose, NVIDIA convention)
-
-__Data types__: f64, f32, f16, bf16, e4m3, e5m2, i8, i4
-
-__Matrix dimensions__: Configurable m×n×k via environment variables
-
-__Quick start:__
-```bash
-# Rust - run all benchmarks
-cargo bench --features bench_dots
-
-# Rust - configure rectangular matrices
-NUMWARS_DIMS_WIDTH=2048 NUMWARS_DIMS_HEIGHT=1024 NUMWARS_DIMS_DEPTH=512 \
-cargo bench --features bench_dots
-
-# Python
-python dots/bench.py
+```text
+numkong.dots_packed i8 → i32    ████████████████████ 1,110.31 GSO/s
+numkong.dots_packed bf16 → f32  ████████▊              487.89 GSO/s
+numpy.matmul f32 → f32          ██▋                    145.73 GSO/s
+numkong.dots_packed f16 → f32   █▋                      91.80 GSO/s
+numkong.dots_packed f32 → f64   ▊                       42.69 GSO/s
 ```
 
 See [dots/README.md](dots/README.md) for details.
 
-## Configuration
+### Pairwise Similarity
 
-All benchmarks support configuration via environment variables. The key principle: **benchmarks generate all combinations of dtypes × operations by default**. Use `NUMWARS_FILTER` to selectively run specific benchmarks.
+Single-pair vector kernels at 2048 dimensions.
+This lists _Dot_ products and true _Euclidean_ distances measurements into one throughput-sorted view.
+NumKong keeps its mixed-precision promotions, while the baseline libraries mostly stay in their input type.
 
-### Common Variables
+Compared to Rust projects, it means:
 
-```bash
-# Universal filter - applies regex to full benchmark names
-# Examples: "f32", "angular|dot", "similarity/angular/f32"
-export NUMWARS_FILTER="f32"
-
-# Timing parameters
-export NUMWARS_WARMUP_SECONDS=3.0    # Warmup time in seconds (was: NUMWARS_WARMUP)
-export NUMWARS_PROFILE_SECONDS=10.0  # Measurement time in seconds (was: NUMWARS_TIME_LIMIT)
-
-# Rust-specific (Criterion)
-export NUMWARS_SAMPLE_SIZE=50    # Number of samples
+```text
+numkong::Dot::dot u8 → u32                ████████████████████ 54.28 GSO/s
+numkong::Dot::dot i8 → i32                ███████████████▉     43.18 GSO/s
+numkong::Euclidean::euclidean u8 → f32    ███████████████      40.83 GSO/s
+numkong::Euclidean::euclidean i8 → f32    ████████████▋        34.10 GSO/s
+numkong::Dot::dot bf16 → f32              ███████▍             20.09 GSO/s
+scalar dot loop f32 → f32                 █████▎               14.25 GSO/s
+numkong::Euclidean::euclidean bf16 → f32  ████▋                12.65 GSO/s
+ndarray::ArrayBase::dot f32 → f32         ██▉                   7.75 GSO/s
+nalgebra::Matrix::dot f32 → f32           ██▊                   7.56 GSO/s
+scalar dot loop u8 → u32                  ██▋                   7.20 GSO/s
+numkong::Dot::dot f32 → f64               ██▎                   6.12 GSO/s
+numkong::Euclidean::euclidean f32 → f64   ██                    5.53 GSO/s
+ndarray sqrt((a - b)·(a - b)) f32 → f32   █▊                    4.75 GSO/s
+scalar dot loop i8 → i32                  █▊                    4.73 GSO/s
+nalgebra (a - b).norm() f32 → f32         █▊                    4.63 GSO/s
+scalar euclidean loop f32 → f32           ▋                     1.62 GSO/s
+scalar euclidean loop u8 → f32            ▍                     1.18 GSO/s
+scalar euclidean loop i8 → f32            ▍                     1.17 GSO/s
+scalar euclidean loop bf16 → f32                                0.16 GSO/s
+scalar dot loop bf16 → f32                                      0.16 GSO/s
 ```
 
-### Module-Specific Variables
+Compared to Python:
 
-#### Similarity
-
-__Configuration__ (problem size, not filters):
-```bash
-export NUMWARS_DIMS=1536           # Vector dimensions (was: NUMWARS_DIMENSIONS)
-export NUMWARS_BATCH_SIZE=1000     # Number of vector pairs
-export NUMWARS_MODE=batch          # "batch" or "all-pairs"
+```text
+numkong.euclidean u8 → f32                  ████████████████████ 5.65 GSO/s
+numkong.euclidean i8 → f32                  ██████████████████   5.08 GSO/s
+numkong.dot u8 → u32                        █████████████████▎   4.88 GSO/s
+numkong.euclidean f32 → f64                 ███████████▊         3.33 GSO/s
+numkong.dot i8 → i32                        ███████████▌         3.25 GSO/s
+scipy.linalg.blas.sdot f32 → f32            ███████████▏         3.14 GSO/s
+numkong.dot f32 → f64                       █████████▊           2.76 GSO/s
+scipy.spatial.distance.euclidean u8 → f32   █▊                   0.48 GSO/s
+numkong.euclidean bf16 → f32                █▌                   0.41 GSO/s
+scipy.spatial.distance.euclidean i8 → f32   █▍                   0.38 GSO/s
+scipy.spatial.distance.euclidean f32 → f32  █▍                   0.38 GSO/s
+numkong.dot bf16 → f32                      █▍                   0.37 GSO/s
 ```
 
-__Filtering__ (use hierarchical names):
-```bash
-# Benchmark names: similarity/{library}/{metric}/{dtype}
-# Examples: similarity/numkong/angular/f32, similarity/baseline/dot/f64
+See [similarity/README.md](similarity/README.md) for details.
 
-NUMWARS_FILTER="f32"                      # Only f32 benchmarks
-NUMWARS_FILTER="angular|dot"               # Only angular and dot metrics
-NUMWARS_FILTER="similarity/numkong"       # Only NumKong library
+### All-Pairs Similarity Matrices
+
+Matrix-vs-matrix comparisons at 2048 rows by 2048 dimensions.
+These are the packed many-to-many siblings of the pairwise spatial kernels above.
+The merged lists below include _angular_ and _euclidean_ metrics, and the headline unit is GSO/s.
+
+Compared to Rust projects, it means:
+
+```text
+numkong::Tensor::angulars_packed i8 → f32      ████████████████████ 590.88 GSO/s
+numkong::Tensor::angulars_packed u8 → f32      ███████████████████▉ 588.37 GSO/s
+numkong::Tensor::euclideans_packed u8 → f32    ███████████████████▊ 585.00 GSO/s
+numkong::Tensor::euclideans_packed i8 → f32    ███████████████████▋ 581.99 GSO/s
+numkong::Tensor::euclideans_packed bf16 → f32  ██████████▌          311.46 GSO/s
+numkong::Tensor::angulars_packed bf16 → f32    ██████████▌          310.52 GSO/s
+ndarray angular matrix f32 → f32               █▎                    37.15 GSO/s
+ndarray euclidean matrix f32 → f32             █▏                    36.03 GSO/s
+nalgebra euclidean matrix f32 → f32            █                     28.83 GSO/s
+nalgebra angular matrix f32 → f32              █                     28.83 GSO/s
+numkong::Tensor::angulars_packed f32 → f64     ▋                     19.44 GSO/s
+numkong::Tensor::euclideans_packed f32 → f64   ▋                     19.37 GSO/s
 ```
 
-#### Elementwise
+Compared to Python through SciPy `cdist`:
 
-__Configuration__:
-```bash
-export NUMWARS_DIMS=1000000        # Tensor size in elements (was: NUMWARS_SHAPE)
+```text
+numkong.angulars_packed u8 → f32      ████████████████████ 465.04 GSO/s
+numkong.euclideans_packed u8 → f32    ███████████████████▉ 463.47 GSO/s
+numkong.euclideans_packed i8 → f32    ███████████████████▉ 463.37 GSO/s
+numkong.angulars_packed i8 → f32      ███████████████████▌ 454.74 GSO/s
+numkong.angulars_packed bf16 → f32    █████████▊           226.56 GSO/s
+numkong.euclideans_packed bf16 → f32  █████████             210.12 GSO/s
+numkong.euclideans_packed f32 → f64   ▉                     20.24 GSO/s
+numkong.angulars_packed f32 → f64     ▊                     19.84 GSO/s
+scipy.cdist euclidean f32 → f64       ▏                      2.83 GSO/s
+scipy.cdist cosine f32 → f64          ▏                      2.62 GSO/s
 ```
 
-__Filtering__:
-```bash
-# Benchmark names: each/{library}/{operation}/{dtype}
-# Examples: each/baseline/add/f32, each/numkong/multiply/f64
+See [similarities/README.md](similarities/README.md) for details.
 
-NUMWARS_FILTER="add"               # Only add operations
-NUMWARS_FILTER="f32"               # Only f32 benchmarks
+### Elementwise Operations
+
+Bandwidth-sensitive elementwise kernels (add, multiply, FMA) over 2048 elements.
+FMA shown as representative sample.
+In Rust:
+
+```text
+numkong::fma f32 → f32                  ████████████████████ 121.56 GB/s
+scalar fma loop f32 → f32               ██████████████████▋  112.96 GB/s
+ndarray fused multiply-add f32 → f32    ███████               42.30 GB/s
+numkong::fma f16 → f16                  ███▊                  22.51 GB/s
+numkong::fma bf16 → bf16                ███▎                  19.47 GB/s
 ```
 
-#### Matrix Multiplication
+In Python:
 
-__Configuration__ (supports rectangular matrices m×n×k):
-```bash
-export NUMWARS_DIMS_WIDTH=1024     # Matrix C width (n) (was: NUMWARS_WIDTH)
-export NUMWARS_DIMS_HEIGHT=1024    # Matrix C height (m) (was: NUMWARS_HEIGHT)
-export NUMWARS_DIMS_DEPTH=1024     # Shared dimension (k) (was: NUMWARS_DEPTH)
-export NUMWARS_THREADS=8           # Thread count for parallel benchmarks
+```text
+numkong.fma f32 → f32                   ████████████████████ 1.24 GB/s
+numkong.fma f16 → f16                   █████████▌           0.59 GB/s
+numpy fma-style expression f32 → f32    ████▊                0.30 GB/s
+numkong.fma bf16 → bf16                 █                    0.06 GB/s
+numpy fma-style expression f16 → f16    ▏                    0.01 GB/s
 ```
 
-__Filtering__:
-```bash
-# Benchmark names: dots/{library}/{dtype}/{m}x{n}x{k}/{threads}t
-# Examples: dots/numkong/f32/1024x1024x1024/8t, dots/ndarray/f32/1024x1024x1024/1t
+See [each/README.md](each/README.md) for details.
 
-NUMWARS_FILTER="f32"                # Only f32 benchmarks
-NUMWARS_FILTER="1024x1024"          # Specific matrix sizes
-NUMWARS_FILTER="dots/ndarray"       # Only ndarray library
+### Reductions
+
+Horizontal reductions over 2048 `f32` elements, including sum, norm, min/max, argmin/argmax, moments, minmax, and row_norms.
+Sum shown as representative sample.
+In Rust:
+
+```text
+polars::ChunkedArray::sum f32 → Option<f32>  ████████████████████ 43.86 GB/s
+numkong::reduce_moments().sum f32 → f64      ███████████████████▊ 43.26 GB/s
+ndarray::ArrayBase::sum f32 → f32            ████████████████▋    36.38 GB/s
+scalar sum loop f32 → f32                    ███                   6.67 GB/s
 ```
 
-## Project Structure
+See [reduce/README.md](reduce/README.md) for details.
 
-```
-NumWars/
-├── Cargo.toml              # Rust workspace manifest
-├── pyproject.toml          # Python project configuration
-├── requirements.txt        # Python dependencies
-├── utils.rs                # Shared Rust utilities
-├── utils.py                # Shared Python utilities
-├── README.md               # This file
-├── LICENSE                 # Apache 2.0
-│
-├── similarity/             # Similarity benchmarks
-│   ├── bench.rs           # Rust benchmarks
-│   ├── bench.py           # Python benchmarks
-│   └── README.md          # Module documentation
-│
-├── each/                   # Elementwise operations
-│   ├── bench.rs           # Rust benchmarks
-│   ├── bench.py           # Python benchmarks
-│   └── README.md          # Module documentation
-│
-└── dots/                   # Matrix multiplication
-    ├── bench.rs           # Rust benchmarks
-    ├── bench.py           # Python benchmarks
-    └── README.md          # Module documentation
+### MaxSim
+
+ColBERT-style late interaction with 32 query vectors, 128 document vectors, and 2048 dimensions.
+NumKong promotes _f32 → f64_ here as well, while the baseline and matrix-style alternatives stay in _f32_.
+In Rust:
+
+```text
+numkong::MaxSimPackedMatrix::score bf16 → f32  ████████████████████ 1,331.55 GSO/s
+numkong::MaxSimPackedMatrix::score f16 → f32   ██████████████████▍  1,224.70 GSO/s
+numkong::MaxSimPackedMatrix::score f32 → f64   ████████████▉          859.61 GSO/s
+ndarray Q @ Dᵀ max-reduce f32 → f32            ▉                       57.87 GSO/s
+nalgebra Q × Dᵀ max-reduce f32 → f32           ▉                       57.39 GSO/s
+scalar MaxSim loop f32 → f32                                            3.26 GSO/s
 ```
 
-## Data Types
+See [maxsim/README.md](maxsim/README.md) for details.
 
-NumWars supports a wide range of numerical types:
+### Geospatial Distances
 
-### Standard Types
+Throughput over 2048 coordinate pairs.
+The unit is MP/s, or million coordinate pairs per second.
+The merged lists below include both _Haversine_ and _Vincenty_ distances.
 
-| Type | Size | Range | Use Case |
-|------|-----:|------:|----------|
-| f64 | 8 bytes | ±1.7e308 | Scientific computing |
-| f32 | 4 bytes | ±3.4e38 | General purpose |
-| i64/u64 | 8 bytes | ±9.2e18 / 0-1.8e19 | Large integers |
-| i32/u32 | 4 bytes | ±2.1e9 / 0-4.3e9 | Standard integers |
-| i16/u16 | 2 bytes | ±32K / 0-65K | Compact integers |
-| i8/u8 | 1 byte | ±128 / 0-255 | Quantized values |
+Compared to Rust projects, it means:
 
-### ML-Specific Types (via ml_dtypes)
-
-| Type | Size | Exponent | Mantissa | Use Case |
-|------|-----:|---------:|---------:|----------|
-| f16 | 2 bytes | 5 bits | 10 bits | Half precision |
-| bf16 | 2 bytes | 8 bits | 7 bits | Brain Float (Google TPU) |
-| e4m3 | 1 byte | 4 bits | 3 bits | FP8 training |
-| e5m2 | 1 byte | 5 bits | 2 bits | FP8 inference |
-| i4 | 0.5 bytes | - | - | Extreme quantization |
-| u4 | 0.5 bytes | - | - | Packed binary data |
-
-__Python support__: Install `ml_dtypes` for exotic types:
-```bash
-pip install ml_dtypes
+```text
+numkong::haversine       ████████████████████ 564.53 MP/s
+numkong::vincenty        ██                    57.76 MP/s
+geo::Haversine distance  ▉                     25.53 MP/s
+geo::Vincenty distance                          1.20 MP/s
 ```
 
-## Competitors
+Compared to Python and its alternatives:
+
+```text
+numkong.haversine            ████████████████████ 526.05 MP/s
+numkong.vincenty             ██▏                   57.22 MP/s
+geopy.distance.great_circle                         0.21 MP/s
+geopy.distance.geodesic                           0.0107 MP/s
+```
+
+See [geospatial/README.md](geospatial/README.md) for details.
+
+### Mesh Alignment
+
+Throughput over point clouds with 2048 3D points each.
+The unit is MP/s, or million 3D points per second.
+The labels include the full return signature so _RMSD_ and _Kabsch_ can share one sorted list cleanly.
+In Rust:
+
+```text
+numkong::MeshAlignment::rmsd f32 → f64        ████████████████████ 610.32 MP/s
+numkong::MeshAlignment::kabsch f32 → f64      ████████████▎        372.86 MP/s
+nalgebra RMSD solve f32 → f32                 ██████▌              199.14 MP/s
+nalgebra Kabsch solve f32 → f64               ████▏                125.14 MP/s
+```
+
+Compared to Python and its alternatives:
+
+```text
+numkong.rmsd f32 → f64                              ████████████████████ 468.79 MP/s
+numkong.kabsch f32 → f64                            ███████████▏         260.75 MP/s
+numkong.umeyama f32 → f64                           ██████████▍          245.37 MP/s
+numpy rmsd f32 → f64                                ██▏                   51.06 MP/s
+scipy Rotation.align_vectors (Kabsch) f32 → f64     ▌                     13.51 MP/s
+biopython SVDSuperimposer (Kabsch) f32 → f64                              1.32 MP/s
+```
+
+See [mesh/README.md](mesh/README.md) for details.
+
+## Replicating the Results
 
 ### Rust
 
-- __Baseline__: Hand-optimized reference implementations
-- __NumKong__: Primary library being benchmarked (SimSIMD)
-- __ndarray__: De-facto standard array library
-- __nalgebra__: Linear algebra library
-- __faer__: Modern, fast linear algebra (f32/f64 only for GEMM)
+```bash
+RUSTFLAGS="-C target-cpu=native" \
+NUMWARS_WARMUP_SECONDS=0.5 \
+NUMWARS_PROFILE_SECONDS=2.0 \
+NUMWARS_SAMPLE_SIZE=15 \
+python scripts/update_root_readme.py
+```
 
 ### Python
 
-- __NumPy__: Universal standard (OpenBLAS/MKL backend)
-- __SciPy__: Scientific computing library
-- __scikit-learn__: Machine learning utilities
-- __PyTorch__: Deep learning framework (optional)
-- __JAX__: JIT-compiled arrays (optional)
-- __TensorFlow__: ML platform (optional)
+The generator creates and reuses a local `.venv` with `uv`, installs `.[similarity,each,dots,geospatial,mesh,reduce,similarities]`, and saves machine-readable outputs under `target/numwars/`.
 
-## Performance Metrics
-
-All benchmarks report:
-
-- __Throughput (GB/s)__: Memory bandwidth utilization
-- __Operations/sec__: Auto-scaling format (KiloOps/s, MegaOps/s, GigaOps/s, TeraOps/s)
-  - Similar to StringWars CUPS (Characters Used Per Second) formatter
-  - Automatically selects appropriate scale based on magnitude
-- __Latency__: Time per operation
-- __Speedup__: Relative to baseline/competitor
-
-Example output:
-```
-similarity/numkong/angular/f32      2.15 µs   45.2 GB/s   234 MegaOps/s
-similarity/numkong/dot/f64          3.82 µs   51.3 GB/s   187 MegaOps/s
-each/numkong/add/f32                1.23 µs   42.1 GB/s   1.23 GigaOps/s
-dots/numkong/f32/1024x1024x1024/8t  8.45 ms   215 GigaOps/s
-```
-
-## Example Usage
-
-### Running Specific Benchmarks
+To re-render the README without rerunning the benchmarks:
 
 ```bash
-# Run only f32 angular similarity
-NUMWARS_FILTER="angular.*f32" cargo bench --features bench_similarity
-
-# Run 512-dimensional vectors
-NUMWARS_DIMS=512 python similarity/bench.py
-
-# Run only addition with 1M elements
-NUMWARS_DIMS=1000000 cargo bench --features bench_each
-
-# Run GEMM with 2048×2048 matrices
-NUMWARS_DIMS_WIDTH=2048 NUMWARS_DIMS_HEIGHT=2048 NUMWARS_DIMS_DEPTH=2048 \
-python dots/bench.py
-
-# Multi-threaded GEMM (8 threads)
-NUMWARS_THREADS=8 cargo bench --features bench_dots
+python scripts/update_root_readme.py --from-existing
 ```
 
-### Comparing Libraries
+## Benchmark Suites
 
-```bash
-# Python: Compare NumKong vs NumPy vs SciPy
-python similarity/bench.py --dtype f32 --metric spatial
-
-# Rust: Compare NumKong vs baseline vs ndarray
-cargo bench --features bench_each --bench bench_each
-```
-
-## Development
-
-### Building from Source
-
-```bash
-# Clone with submodules (for NumKong/SimSIMD)
-git clone --recursive https://github.com/ashvardanian/NumWars.git
-cd NumWars
-
-# Build Rust benchmarks
-cargo build --release --all-features
-
-# Install Python package in development mode
-pip install -e ".[all]"
-```
-
-### Adding New Benchmarks
-
-1. Create benchmark function in `module/bench.rs` or `module/bench.py`
-2. Use `should_run_benchmark()` for filtering
-3. Report throughput metrics
-4. Add documentation to module README
-
-See existing benchmarks for examples.
-
-### Testing
-
-```bash
-# Rust: Run tests
-cargo test --all-features
-
-# Python: Run with small dataset
-NUMWARS_DIMS=128 NUMWARS_PROFILE_SECONDS=1.0 python similarity/bench.py
-```
-
-## Results
-
-Benchmark results will be published here after running on reference hardware.
-
-### Test Platform
-
-- __CPU__: (To be determined)
-- __RAM__: (To be determined)
-- __OS__: Ubuntu 22.04 LTS
-- __Compiler__: Rust 1.75.0, GCC 11.4.0
-- __BLAS__: OpenBLAS 0.3.21
+- [similarity/README.md](similarity/README.md)
+- [similarities/README.md](similarities/README.md)
+- [dots/README.md](dots/README.md)
+- [each/README.md](each/README.md)
+- [reduce/README.md](reduce/README.md)
+- [maxsim/README.md](maxsim/README.md)
+- [geospatial/README.md](geospatial/README.md)
+- [mesh/README.md](mesh/README.md)
 
 ## Related Projects
 
-- __[StringWars](https://github.com/ashvardanian/StringWars)__: String operations benchmarks (sibling project)
-- __[NumKong/SimSIMD](https://github.com/ashvardanian/SimSIMD)__: The library being benchmarked
-- __[USearch](https://github.com/unum-cloud/usearch)__: Vector search using NumKong
-- __[ml_dtypes](https://github.com/jax-ml/ml_dtypes)__: Google's ML data types library
-
-## Contributing
-
-Contributions welcome! Please:
-
-1. Follow the existing code style
-2. Add tests for new benchmarks
-3. Update documentation
-4. Run benchmarks before submitting PR
+- [NumKong](https://github.com/ashvardanian/NumKong)
+- [StringWars](https://github.com/ashvardanian/StringWars)
 
 ## License
 
-Apache 2.0 - See [LICENSE](LICENSE) for details.
-
-## Citation
-
-If you use NumWars in your research, please cite:
-
-```bibtex
-@software{numwars2024,
-  title = {NumWars: Mixed-Precision Numerical Operations Benchmarks},
-  author = {NumWars Contributors},
-  year = {2024},
-  url = {https://github.com/ashvardanian/NumWars}
-}
-```
-
-## Acknowledgments
-
-- Inspired by [StringWars](https://github.com/ashvardanian/StringWars)
-- Built on [NumKong/SimSIMD](https://github.com/ashvardanian/SimSIMD)
-- Uses [Criterion](https://github.com/bheisler/criterion.rs) for Rust benchmarks
-- Uses [ml_dtypes](https://github.com/jax-ml/ml_dtypes) for exotic types
+Apache 2.0.
+See [LICENSE](LICENSE).

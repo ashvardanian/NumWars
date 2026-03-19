@@ -16,8 +16,9 @@
 //! ```
 //!
 //! Environment variables:
-//! - NUMWARS_DIMS: Vector dimension (default: 1536)
-//! - NUMWARS_BATCH_SIZE: Number of query/document vectors (default: 1000)
+//! - NUMWARS_DIMS_DEPTH: Shared dimension k (default: 2048)
+//! - NUMWARS_DIMS_HEIGHT: Query count m (default: 2048)
+//! - NUMWARS_DIMS_WIDTH: Document count n (default: 2048)
 //! - NUMWARS_FILTER: Regex to filter benchmark names
 //!
 //! Benchmark naming: maxsim/{dtype}
@@ -293,9 +294,9 @@ fn bench_maxsim_dtype<T>(
 /// Benchmark MaxSim scoring.
 pub fn bench_maxsim(c: &mut Criterion) {
     capabilities::configure_thread();
-    let dimension = get_vector_dims();
-    let query_count = 32; // typical ColBERT query length
-    let document_count = 128; // typical ColBERT document length
+    let dimension = get_matrix_dims_depth();
+    let query_count = get_matrix_dims_height();
+    let document_count = get_matrix_dims_width();
 
     bench_maxsim_dtype(c, "f32", query_count, document_count, dimension, 1.0f32);
     bench_maxsim_dtype(c, "bf16", query_count, document_count, dimension, bf16::from_f32(1.0));

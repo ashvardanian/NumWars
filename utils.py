@@ -11,10 +11,19 @@ import re
 import time
 from typing import Any, Callable, List, Optional, Tuple, TypeVar, Union
 
+# Force single-threaded execution for all numerical libraries.
+# Must be set before importing numpy or any BLAS-backed library.
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+
 import numpy as np
 
 try:
     import ml_dtypes
+
     HAS_ML_DTYPES = True
 except ImportError:
     HAS_ML_DTYPES = False
@@ -107,7 +116,9 @@ def measure_latency(func: Callable, *args, **kwargs) -> Tuple[Any, float]:
     return result, end - start
 
 
-def measure_throughput(func: Callable, bytes_processed: int, min_time: float = 1.0) -> Tuple[float, int]:
+def measure_throughput(
+    func: Callable, bytes_processed: int, min_time: float = 1.0
+) -> Tuple[float, int]:
     """
     Measure throughput of a function by running it multiple times.
 
@@ -134,6 +145,69 @@ def measure_throughput(func: Callable, bytes_processed: int, min_time: float = 1
     return throughput, iterations
 
 
+def measure_average_duration(
+    func: Callable[[], Any], warmup_seconds: float, profile_seconds: float
+) -> float:
+    """
+    Measure average duration of a function call with warmup and profiling phases.
+
+    Args:
+        func: Zero-argument callable to benchmark
+        warmup_seconds: Warmup duration in seconds
+        profile_seconds: Measurement duration in seconds
+
+    Returns:
+        Average duration per call in seconds
+    """
+    warmup_start = time.perf_counter()
+    while (time.perf_counter() - warmup_start) < warmup_seconds:
+        func()
+
+    durations = []
+    profile_start = time.perf_counter()
+    while (time.perf_counter() - profile_start) < profile_seconds:
+        iter_start = time.perf_counter()
+        func()
+        durations.append(time.perf_counter() - iter_start)
+
+    if not durations:
+        iter_start = time.perf_counter()
+        func()
+        durations.append(time.perf_counter() - iter_start)
+
+    return sum(durations) / len(durations)
+
+
+def normalize_dtype_name(dtype_like) -> str:
+    """Normalize a NumPy-style dtype string to a short form (e.g. 'float32' -> 'f32')."""
+    text = str(dtype_like).lower()
+    mapping = {
+        "float64": "f64",
+        "float32": "f32",
+        "float16": "f16",
+        "bfloat16": "bf16",
+        "int64": "i64",
+        "int32": "i32",
+        "int16": "i16",
+        "int8": "i8",
+        "uint64": "u64",
+        "uint32": "u32",
+        "uint16": "u16",
+        "uint8": "u8",
+    }
+    return mapping.get(text, text)
+
+
+def calculate_gso_per_sec(num_operations: int, duration_secs: float) -> float:
+    """Calculate giga scalar operations per second."""
+    return (num_operations / duration_secs) / 1e9 if duration_secs > 0 else 0.0
+
+
+def calculate_mps(count: int, duration_secs: float) -> float:
+    """Calculate millions of pairs (or points) per second."""
+    return (count / duration_secs) / 1e6 if duration_secs > 0 else 0.0
+
+
 # endregion
 
 # region:
@@ -144,11 +218,14 @@ def measure_throughput(func: Callable, bytes_processed: int, min_time: float = 1
 
 
 def get_ml_dtype(dtype_str: str):
-    """Get ML data type from string (e4m3, e5m2, i4, u4)."""
+    """Get ML data type from string (bf16, e4m3, e5m2, i4, u4)."""
     if not HAS_ML_DTYPES:
-        raise ImportError("ml_dtypes package is required for exotic types. Install with: pip install ml_dtypes")
+        raise ImportError(
+            "ml_dtypes package is required for exotic types. Install with: pip install ml_dtypes"
+        )
 
     dtype_map = {
+        "bf16": ml_dtypes.bfloat16,
         "e4m3": ml_dtypes.float8_e4m3fn,
         "e5m2": ml_dtypes.float8_e5m2,
         "i4": ml_dtypes.int4,
@@ -156,7 +233,9 @@ def get_ml_dtype(dtype_str: str):
     }
 
     if dtype_str not in dtype_map:
-        raise ValueError(f"Unknown ML dtype: {dtype_str}. Supported: {list(dtype_map.keys())}")
+        raise ValueError(
+            f"Unknown ML dtype: {dtype_str}. Supported: {list(dtype_map.keys())}"
+        )
 
     return dtype_map[dtype_str]
 
@@ -194,7 +273,9 @@ def parse_numpy_dtype(dtype_str: str) -> np.dtype:
     raise ValueError(f"Unknown dtype: {dtype_str}")
 
 
-def generate_random_array(shape: Tuple[int, ...], dtype_str: str, seed: Optional[int] = None) -> np.ndarray:
+def generate_random_array(
+    shape: Tuple[int, ...], dtype_str: str, seed: Optional[int] = None
+) -> np.ndarray:
     """
     Generate random array with specified shape and data type.
 
@@ -215,7 +296,11 @@ def generate_random_array(shape: Tuple[int, ...], dtype_str: str, seed: Optional
         return data.astype(dtype)
     elif dtype_str.startswith("i"):
         # Signed integers
-        info = np.iinfo(dtype) if hasattr(np, 'iinfo') and dtype_str not in ("i4",) else None
+        info = (
+            np.iinfo(dtype)
+            if hasattr(np, "iinfo") and dtype_str not in ("i4",)
+            else None
+        )
         if info:
             return rng.integers(info.min, info.max, size=shape, dtype=dtype)
         else:
@@ -223,7 +308,11 @@ def generate_random_array(shape: Tuple[int, ...], dtype_str: str, seed: Optional
             return rng.integers(-8, 7, size=shape).astype(dtype)
     elif dtype_str.startswith("u"):
         # Unsigned integers
-        info = np.iinfo(dtype) if hasattr(np, 'iinfo') and dtype_str not in ("u4",) else None
+        info = (
+            np.iinfo(dtype)
+            if hasattr(np, "iinfo") and dtype_str not in ("u4",)
+            else None
+        )
         if info:
             return rng.integers(0, info.max, size=shape, dtype=dtype)
         else:
@@ -237,7 +326,9 @@ def generate_random_array(shape: Tuple[int, ...], dtype_str: str, seed: Optional
         raise ValueError(f"Unsupported dtype for random generation: {dtype_str}")
 
 
-def generate_probability_distribution(size: int, dtype_str: str = "f32", seed: Optional[int] = None) -> np.ndarray:
+def generate_probability_distribution(
+    size: int, dtype_str: str = "f32", seed: Optional[int] = None
+) -> np.ndarray:
     """
     Generate random probability distribution (values sum to 1.0).
 
@@ -276,7 +367,7 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
         metavar="REGEX",
         default=get_env("NUMWARS_FILTER"),
         help="Regex to select which benchmarks to run (or set NUMWARS_FILTER env var). "
-             "Examples: --filter 'f32' (only f32), --filter 'angular|dot' (specific metrics)",
+        "Examples: --filter 'f32' (only f32), --filter 'angular|dot' (specific metrics)",
     )
     parser.add_argument(
         "--warmup",
@@ -298,7 +389,9 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def should_run_benchmark(name: str, filter_pattern: Optional[re.Pattern] = None) -> bool:
+def should_run_benchmark(
+    name: str, filter_pattern: Optional[re.Pattern] = None
+) -> bool:
     """
     Check if a benchmark should run based on NUMWARS_FILTER regex.
 
@@ -309,7 +402,7 @@ def should_run_benchmark(name: str, filter_pattern: Optional[re.Pattern] = None)
     Example benchmark names:
     - "similarity/angular/f32"
     - "each/add/f64"
-    - "dots/numkong/f32/1024x1024x1024/8t"
+    - "dots/f32/1024x1024x1024"
 
     Example filters:
     - NUMWARS_FILTER="f32" → only f32 benchmarks
@@ -367,7 +460,9 @@ def format_duration(seconds: float) -> str:
         return f"{seconds:.3f} s"
 
 
-def print_results_table(results: List[dict], headers: Optional[List[str]] = None) -> None:
+def print_results_table(
+    results: List[dict], headers: Optional[List[str]] = None
+) -> None:
     """
     Print benchmark results as a formatted table.
 
@@ -418,7 +513,7 @@ def get_matrix_dims_width() -> int:
     Get matrix output width (n in C = A @ B.T where C is m×n).
     Used in dots/ module for matrix multiplication benchmarks.
     """
-    return get_env_parsed("NUMWARS_DIMS_WIDTH", 1024, int)
+    return get_env_parsed("NUMWARS_DIMS_WIDTH", 2048, int)
 
 
 def get_matrix_dims_height() -> int:
@@ -426,7 +521,7 @@ def get_matrix_dims_height() -> int:
     Get matrix output height (m in C = A @ B.T where C is m×n).
     Used in dots/ module for matrix multiplication benchmarks.
     """
-    return get_env_parsed("NUMWARS_DIMS_HEIGHT", 1024, int)
+    return get_env_parsed("NUMWARS_DIMS_HEIGHT", 2048, int)
 
 
 def get_matrix_dims_depth() -> int:
@@ -434,7 +529,7 @@ def get_matrix_dims_depth() -> int:
     Get matrix shared dimension (k in A @ B.T where A is m×k and B is n×k).
     Used in dots/ module for matrix multiplication benchmarks.
     """
-    return get_env_parsed("NUMWARS_DIMS_DEPTH", 1024, int)
+    return get_env_parsed("NUMWARS_DIMS_DEPTH", 2048, int)
 
 
 def get_tensor_dims() -> int:
@@ -450,7 +545,7 @@ def get_vector_dims() -> int:
     Get vector dimensions for similarity operations.
     Used in similarity/ module for pairwise vector similarity benchmarks.
     """
-    return get_env_parsed("NUMWARS_DIMS", 1536, int)
+    return get_env_parsed("NUMWARS_DIMS", 2048, int)
 
 
 def get_batch_size() -> int:
@@ -467,6 +562,7 @@ def get_thread_count() -> int:
     Defaults to the number of logical CPUs on the system.
     """
     import os
+
     default_threads = os.cpu_count() or 1
     return get_env_parsed("NUMWARS_THREADS", default_threads, int)
 
@@ -503,7 +599,7 @@ def calculate_ops_per_sec(num_operations: int, duration_secs: float) -> float:
 
 def format_ops_per_sec(ops_per_sec: float) -> str:
     """
-    Format operations per second with auto-scaling units.
+    Format scalar operations per second with auto-scaling units.
 
     Similar to StringWars CUPS (Characters Used Per Second) formatter.
     Automatically selects appropriate scale.
@@ -512,24 +608,24 @@ def format_ops_per_sec(ops_per_sec: float) -> str:
         ops_per_sec: Operations per second
 
     Returns:
-        Formatted string like "345.23 GigaOps/s"
+        Formatted string like "345.23 GSO/s"
 
     Examples:
         >>> format_ops_per_sec(1234567890)
-        "1.23 GigaOps/s"
+        "1.23 GSO/s"
         >>> format_ops_per_sec(2.5e12)
-        "2.50 TeraOps/s"
+        "2.50 TSO/s"
     """
     if ops_per_sec >= 1e12:
-        return f"{ops_per_sec / 1e12:.2f} TeraOps/s"
+        return f"{ops_per_sec / 1e12:.2f} TSO/s"
     elif ops_per_sec >= 1e9:
-        return f"{ops_per_sec / 1e9:.2f} GigaOps/s"
+        return f"{ops_per_sec / 1e9:.2f} GSO/s"
     elif ops_per_sec >= 1e6:
-        return f"{ops_per_sec / 1e6:.2f} MegaOps/s"
+        return f"{ops_per_sec / 1e6:.2f} MSO/s"
     elif ops_per_sec >= 1e3:
-        return f"{ops_per_sec / 1e3:.2f} KiloOps/s"
+        return f"{ops_per_sec / 1e3:.2f} KSO/s"
     else:
-        return f"{ops_per_sec:.2f} Ops/s"
+        return f"{ops_per_sec:.2f} SO/s"
 
 
 def benchmark_with_time_limit(

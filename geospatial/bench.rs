@@ -9,7 +9,7 @@
 //! ```
 //!
 //! Environment variables:
-//! - NUMWARS_DIMS: Number of coordinate pairs (default: 1536)
+//! - NUMWARS_DIMS: Number of coordinate pairs (default: 2048)
 //! - NUMWARS_FILTER: Regex to filter benchmark names
 //!
 //! Benchmark naming: geospatial/{metric}/{dtype}
@@ -22,7 +22,7 @@ use criterion::measurement::WallTime;
 use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion, Throughput};
 use geo::{point, Distance, Geodesic, Haversine as GeoHaversine};
 use num_traits::Float;
-use numkong::{Haversine, Vincenty};
+use numkong::{capabilities, Haversine, Vincenty};
 use rand::distr::uniform::SampleUniform;
 use rand::{Rng, RngExt};
 use std::hint::black_box;
@@ -419,6 +419,7 @@ where
 
 /// Benchmark Haversine distance
 pub fn bench_haversine(c: &mut Criterion) {
+    capabilities::configure_thread();
     let count = get_vector_dims();
     let mut rng = rand::rng();
     bench_haversine_dtype::<f32>(c, &mut rng, "f32", count);

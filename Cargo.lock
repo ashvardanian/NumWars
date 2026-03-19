@@ -1609,7 +1609,9 @@ dependencies = [
 
 [[package]]
 name = "numkong"
-version = "6.5.15"
+version = "7.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dde018efb2b66f9666e28219c79013dbeb64b53d94e6d0bf371eb4ad3d14fb1b"
 dependencies = [
  "cc",
 ]

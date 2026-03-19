@@ -23,7 +23,7 @@ use criterion::measurement::WallTime;
 use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion, Throughput};
 use nalgebra::Matrix3;
 use num_traits::Float;
-use numkong::{bf16, f16, MeshAlignment};
+use numkong::{bf16, capabilities, f16, MeshAlignment};
 use rand::Rng;
 use std::hint::black_box;
 use utils::*;
@@ -414,6 +414,7 @@ where
 
 /// Benchmark RMSD (root mean square deviation without alignment).
 pub fn bench_rmsd(c: &mut Criterion) {
+    capabilities::configure_thread();
     let count = get_point_count();
     let mut rng = rand::rng();
     bench_mesh_op_dtype::<f32>(c, &mut rng, MeshOp::Rmsd, "f32", count);

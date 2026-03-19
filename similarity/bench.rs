@@ -1,7 +1,7 @@
 //! Benchmark for vector similarity operations
 //!
 //! Compares NumKong vs baseline Rust implementations for pairwise similarity metrics.
-//! Benchmarks spatial (dot, angular, sqeuclidean), binary (hamming, jaccard), and probability
+//! Benchmarks spatial (dot, angular, euclidean, sqeuclidean), binary (hamming, jaccard), and probability
 //! (Jensen-Shannon, Kullback-Leibler) distances.
 //!
 //! Run with:
@@ -19,14 +19,14 @@
 //! ```
 //!
 //! Environment variables:
-//! - NUMWARS_DIMS: Vector dimensions (default: 1536)
+//! - NUMWARS_DIMS: Vector dimensions (default: 2048)
 //! - NUMWARS_BATCH_SIZE: Number of vector pairs (default: 1000)
 //! - NUMWARS_FILTER: Regex to filter benchmark names (default: none, runs all)
 //! - NUMWARS_WARMUP_SECONDS: Warmup time in seconds (default: 3.0)
 //! - NUMWARS_PROFILE_SECONDS: Measurement time in seconds (default: 10.0)
 //!
 //! Benchmark naming: similarity/{metric}/{dtype}
-//! Examples: similarity/angular/f32, similarity/dot/f64, similarity/sqeuclidean/i8
+//! Examples: similarity/angular/f32, similarity/dot/f64, similarity/euclidean/i8
 
 #[path = "../utils.rs"]
 mod utils;
@@ -35,7 +35,8 @@ use criterion::measurement::WallTime;
 use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion, Throughput};
 use num_traits::{Float, Num, NumCast};
 use numkong::{
-    bf16, e2m3, e3m2, e4m3, e5m2, f16, u1x8, Angular, Dot, Euclidean, Hamming, Jaccard, JensenShannon, KullbackLeibler,
+    bf16, capabilities, e2m3, e3m2, e4m3, e5m2, f16, u1x8, Angular, Dot, Euclidean, Hamming, Jaccard, JensenShannon,
+    KullbackLeibler,
 };
 use std::hint::black_box;
 use std::iter::Sum;
@@ -63,6 +64,11 @@ trait BaselineSqEuclideanType: BaselineConvert<Self::Acc> + Copy + Sized + 'stat
     type Output: NumCast + Copy + 'static;
 }
 
+trait BaselineEuclideanType: BaselineConvert<Self::Acc> + Copy + Sized + 'static {
+    type Acc: Num + Copy + NumCast + AddAssign + 'static;
+    type Output: Float + NumCast + Copy + 'static;
+}
+
 trait BaselineAngularType: BaselineConvert<Self::Acc> + Copy + Sized + 'static {
     type Acc: Num + Copy + NumCast + AddAssign + 'static;
     type Output: Float + NumCast + Copy + 'static;
@@ -79,6 +85,10 @@ impl BaselineDotType for f64 {
 impl BaselineDotType for i8 {
     type Acc = i32;
     type Output = i32;
+}
+impl BaselineDotType for u8 {
+    type Acc = u32;
+    type Output = u32;
 }
 impl BaselineDotType for f16 {
     type Acc = f32;
@@ -117,6 +127,10 @@ impl BaselineSqEuclideanType for i8 {
     type Acc = i32;
     type Output = u32;
 }
+impl BaselineSqEuclideanType for u8 {
+    type Acc = i32;
+    type Output = u32;
+}
 impl BaselineSqEuclideanType for f16 {
     type Acc = f32;
     type Output = f32;
@@ -142,6 +156,47 @@ impl BaselineSqEuclideanType for e3m2 {
     type Output = f32;
 }
 
+impl BaselineEuclideanType for f32 {
+    type Acc = f32;
+    type Output = f32;
+}
+impl BaselineEuclideanType for f64 {
+    type Acc = f64;
+    type Output = f64;
+}
+impl BaselineEuclideanType for i8 {
+    type Acc = i32;
+    type Output = f32;
+}
+impl BaselineEuclideanType for u8 {
+    type Acc = i32;
+    type Output = f32;
+}
+impl BaselineEuclideanType for f16 {
+    type Acc = f32;
+    type Output = f32;
+}
+impl BaselineEuclideanType for bf16 {
+    type Acc = f32;
+    type Output = f32;
+}
+impl BaselineEuclideanType for e4m3 {
+    type Acc = f32;
+    type Output = f32;
+}
+impl BaselineEuclideanType for e5m2 {
+    type Acc = f32;
+    type Output = f32;
+}
+impl BaselineEuclideanType for e2m3 {
+    type Acc = f32;
+    type Output = f32;
+}
+impl BaselineEuclideanType for e3m2 {
+    type Acc = f32;
+    type Output = f32;
+}
+
 impl BaselineAngularType for f32 {
     type Acc = f32;
     type Output = f32;
@@ -152,6 +207,10 @@ impl BaselineAngularType for f64 {
 }
 impl BaselineAngularType for i8 {
     type Acc = i32;
+    type Output = f32;
+}
+impl BaselineAngularType for u8 {
+    type Acc = u32;
     type Output = f32;
 }
 impl BaselineAngularType for f16 {
@@ -403,6 +462,13 @@ fn baseline_sqeuclidean<T: BaselineSqEuclideanType>(a: &[T], b: &[T]) -> Option<
     reduce_unrolled8(a, b, SqEuclideanReducer::<T::Acc>::new()).map(|value| NumCast::from(value).unwrap())
 }
 
+fn baseline_euclidean<T: BaselineEuclideanType>(a: &[T], b: &[T]) -> Option<T::Output> {
+    reduce_unrolled8(a, b, SqEuclideanReducer::<T::Acc>::new()).map(|value| {
+        let squared_distance: T::Output = NumCast::from(value).unwrap();
+        squared_distance.sqrt()
+    })
+}
+
 fn baseline_angular<T: BaselineAngularType>(a: &[T], b: &[T]) -> Option<T::Output> {
     reduce_unrolled8(a, b, AngularReducer::<T::Acc>::new()).map(|stats| {
         let dot: T::Output = NumCast::from(stats.dot).unwrap();
@@ -521,6 +587,24 @@ impl<T: Euclidean> RunNumKongSqEuclidean for T {
     }
 }
 
+trait RunBaselineEuclidean: Sized {
+    fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _a: &[Self], _b: &[Self]) {}
+}
+impl<T: BaselineEuclideanType> RunBaselineEuclidean for T {
+    fn run(group: &mut BenchmarkGroup<'_, WallTime>, a: &[T], b: &[T]) {
+        group.bench_function("baseline", |bench| bench.iter(|| black_box(baseline_euclidean(a, b))));
+    }
+}
+
+trait RunNumKongEuclidean: Sized {
+    fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _a: &[Self], _b: &[Self]) {}
+}
+impl<T: Euclidean> RunNumKongEuclidean for T {
+    fn run(group: &mut BenchmarkGroup<'_, WallTime>, a: &[T], b: &[T]) {
+        group.bench_function("numkong", |bench| bench.iter(|| black_box(Euclidean::euclidean(a, b))));
+    }
+}
+
 trait RunBaselineDot: Sized {
     fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _a: &[Self], _b: &[Self]) {}
 }
@@ -556,6 +640,8 @@ impl RunNalgebraDot for f64 {
         group.bench_function("nalgebra", |bench| bench.iter(|| black_box(a.dot(&b))));
     }
 }
+impl RunNalgebraDot for i8 {}
+impl RunNalgebraDot for u8 {}
 impl RunNalgebraDot for f16 {}
 impl RunNalgebraDot for bf16 {}
 impl RunNalgebraDot for e4m3 {}
@@ -580,6 +666,8 @@ impl RunNdarrayDot for f64 {
         group.bench_function("ndarray", |bench| bench.iter(|| black_box(a.dot(&b))));
     }
 }
+impl RunNdarrayDot for i8 {}
+impl RunNdarrayDot for u8 {}
 impl RunNdarrayDot for f16 {}
 impl RunNdarrayDot for bf16 {}
 impl RunNdarrayDot for e4m3 {}
@@ -610,12 +698,76 @@ impl RunBlasDot for f64 {
         });
     }
 }
+impl RunBlasDot for i8 {}
+impl RunBlasDot for u8 {}
 impl RunBlasDot for f16 {}
 impl RunBlasDot for bf16 {}
 impl RunBlasDot for e4m3 {}
 impl RunBlasDot for e5m2 {}
 impl RunBlasDot for e2m3 {}
 impl RunBlasDot for e3m2 {}
+
+trait RunNalgebraEuclidean: Sized {
+    fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _dims: usize, _v: Self) {}
+}
+impl RunNalgebraEuclidean for f32 {
+    fn run(group: &mut BenchmarkGroup<'_, WallTime>, dims: usize, v: f32) {
+        let a = nalgebra::DVector::<f32>::from_element(dims, v);
+        let b = nalgebra::DVector::<f32>::from_element(dims, v);
+        group.bench_function("nalgebra", |bench| bench.iter(|| black_box((&a - &b).norm())));
+    }
+}
+impl RunNalgebraEuclidean for f64 {
+    fn run(group: &mut BenchmarkGroup<'_, WallTime>, dims: usize, v: f64) {
+        let a = nalgebra::DVector::<f64>::from_element(dims, v);
+        let b = nalgebra::DVector::<f64>::from_element(dims, v);
+        group.bench_function("nalgebra", |bench| bench.iter(|| black_box((&a - &b).norm())));
+    }
+}
+impl RunNalgebraEuclidean for i8 {}
+impl RunNalgebraEuclidean for u8 {}
+impl RunNalgebraEuclidean for f16 {}
+impl RunNalgebraEuclidean for bf16 {}
+impl RunNalgebraEuclidean for e4m3 {}
+impl RunNalgebraEuclidean for e5m2 {}
+impl RunNalgebraEuclidean for e2m3 {}
+impl RunNalgebraEuclidean for e3m2 {}
+
+trait RunNdarrayEuclidean: Sized {
+    fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _dims: usize, _v: Self) {}
+}
+impl RunNdarrayEuclidean for f32 {
+    fn run(group: &mut BenchmarkGroup<'_, WallTime>, dims: usize, v: f32) {
+        let a = ndarray::Array1::<f32>::from_elem(dims, v);
+        let b = ndarray::Array1::<f32>::from_elem(dims, v);
+        group.bench_function("ndarray", |bench| {
+            bench.iter(|| {
+                let diff = &a - &b;
+                black_box(diff.dot(&diff).sqrt())
+            })
+        });
+    }
+}
+impl RunNdarrayEuclidean for f64 {
+    fn run(group: &mut BenchmarkGroup<'_, WallTime>, dims: usize, v: f64) {
+        let a = ndarray::Array1::<f64>::from_elem(dims, v);
+        let b = ndarray::Array1::<f64>::from_elem(dims, v);
+        group.bench_function("ndarray", |bench| {
+            bench.iter(|| {
+                let diff = &a - &b;
+                black_box(diff.dot(&diff).sqrt())
+            })
+        });
+    }
+}
+impl RunNdarrayEuclidean for i8 {}
+impl RunNdarrayEuclidean for u8 {}
+impl RunNdarrayEuclidean for f16 {}
+impl RunNdarrayEuclidean for bf16 {}
+impl RunNdarrayEuclidean for e4m3 {}
+impl RunNdarrayEuclidean for e5m2 {}
+impl RunNdarrayEuclidean for e2m3 {}
+impl RunNdarrayEuclidean for e3m2 {}
 
 trait RunBaselineKullbackLeibler: Sized {
     fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _a: &[Self], _b: &[Self]) {}
@@ -699,6 +851,26 @@ where
     group.finish();
 }
 
+fn bench_euclidean_dtype<T>(c: &mut Criterion, dtype: &str, dims: usize, init: T)
+where
+    T: Clone + RunBaselineEuclidean + RunNumKongEuclidean + RunNalgebraEuclidean + RunNdarrayEuclidean + 'static,
+{
+    let name = format!("similarity/euclidean/{dtype}");
+    if !should_run_benchmark(&name) {
+        return;
+    }
+    let mut group = c.benchmark_group(name);
+    group.throughput(Throughput::Bytes((2 * dims * std::mem::size_of::<T>()) as u64));
+    let extra_init = init.clone();
+    let a = vec![init.clone(); dims];
+    let b = vec![init; dims];
+    <T as RunNumKongEuclidean>::run(&mut group, &a, &b);
+    <T as RunBaselineEuclidean>::run(&mut group, &a, &b);
+    <T as RunNalgebraEuclidean>::run(&mut group, dims, extra_init.clone());
+    <T as RunNdarrayEuclidean>::run(&mut group, dims, extra_init);
+    group.finish();
+}
+
 fn bench_dot_dtype<T>(c: &mut Criterion, dtype: &str, dims: usize, init: T)
 where
     T: Clone + RunBaselineDot + RunNumKongDot + RunNalgebraDot + RunNdarrayDot + RunBlasDot + 'static,
@@ -758,12 +930,29 @@ where
 
 // region: Benchmarks
 
+/// Benchmark true Euclidean distance
+pub fn bench_euclidean(c: &mut Criterion) {
+    capabilities::configure_thread();
+    let dims = get_vector_dims();
+    bench_euclidean_dtype(c, "f32", dims, 1.0f32);
+    bench_euclidean_dtype(c, "f64", dims, 1.0f64);
+    bench_euclidean_dtype(c, "i8", dims, 1i8);
+    bench_euclidean_dtype(c, "u8", dims, 1u8);
+    bench_euclidean_dtype(c, "f16", dims, f16::from_f32(1.0));
+    bench_euclidean_dtype(c, "bf16", dims, bf16::from_f32(1.0));
+    bench_euclidean_dtype(c, "e4m3", dims, e4m3::from_f32(1.0));
+    bench_euclidean_dtype(c, "e5m2", dims, e5m2::from_f32(1.0));
+    bench_euclidean_dtype(c, "e2m3", dims, e2m3::from_f32(1.0));
+    bench_euclidean_dtype(c, "e3m2", dims, e3m2::from_f32(1.0));
+}
+
 /// Benchmark squared Euclidean distance
 pub fn bench_sqeuclidean(c: &mut Criterion) {
     let dims = get_vector_dims();
     bench_sqeuclidean_dtype(c, "f32", dims, 1.0f32);
     bench_sqeuclidean_dtype(c, "f64", dims, 1.0f64);
     bench_sqeuclidean_dtype(c, "i8", dims, 1i8);
+    bench_sqeuclidean_dtype(c, "u8", dims, 1u8);
     bench_sqeuclidean_dtype(c, "f16", dims, f16::from_f32(1.0));
     bench_sqeuclidean_dtype(c, "bf16", dims, bf16::from_f32(1.0));
     bench_sqeuclidean_dtype(c, "e4m3", dims, e4m3::from_f32(1.0));
@@ -778,6 +967,7 @@ pub fn bench_angular(c: &mut Criterion) {
     bench_angular_dtype(c, "f32", dims, 1.0f32);
     bench_angular_dtype(c, "f64", dims, 1.0f64);
     bench_angular_dtype(c, "i8", dims, 1i8);
+    bench_angular_dtype(c, "u8", dims, 1u8);
     bench_angular_dtype(c, "f16", dims, f16::from_f32(1.0));
     bench_angular_dtype(c, "bf16", dims, bf16::from_f32(1.0));
     bench_angular_dtype(c, "e4m3", dims, e4m3::from_f32(1.0));
@@ -791,6 +981,8 @@ pub fn bench_dot(c: &mut Criterion) {
     let dims = get_vector_dims();
     bench_dot_dtype(c, "f32", dims, 1.0f32);
     bench_dot_dtype(c, "f64", dims, 1.0f64);
+    bench_dot_dtype(c, "i8", dims, 1i8);
+    bench_dot_dtype(c, "u8", dims, 1u8);
     bench_dot_dtype(c, "f16", dims, f16::from_f32(1.0));
     bench_dot_dtype(c, "bf16", dims, bf16::from_f32(1.0));
     bench_dot_dtype(c, "e4m3", dims, e4m3::from_f32(1.0));
@@ -879,6 +1071,15 @@ mod tests {
     }
 
     #[test]
+    fn dot_baseline_correctness_u8_output_type() {
+        let a = vec![1u8, 2, 3];
+        let b = vec![4u8, 5, 6];
+
+        let result: Option<u32> = baseline_dot(&a, &b);
+        assert_eq!(result, Some(32));
+    }
+
+    #[test]
     fn sqeuclidean_baseline_correctness_f32() {
         let a = vec![0.0f32, 0.0];
         let b = vec![3.0f32, 4.0];
@@ -896,6 +1097,15 @@ mod tests {
 
         let result: Option<u32> = baseline_sqeuclidean(&a, &b);
         assert_eq!(result, Some(25));
+    }
+
+    #[test]
+    fn euclidean_baseline_correctness_u8_output_type() {
+        let a = vec![0u8, 0];
+        let b = vec![3u8, 4];
+
+        let result: Option<f32> = baseline_euclidean(&a, &b);
+        assert_eq!(result, Some(5.0));
     }
 
     #[test]
@@ -940,7 +1150,7 @@ mod tests {
 criterion_group! {
     name = benches;
     config = utils::configure_criterion();
-    targets = bench_dot, bench_angular, bench_sqeuclidean,
+    targets = bench_dot, bench_angular, bench_euclidean, bench_sqeuclidean,
               bench_hamming, bench_jaccard,
               bench_kullbackleibler, bench_jensenshannon
 }

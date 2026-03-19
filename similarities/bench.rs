@@ -10,7 +10,7 @@
 //! ```
 //!
 //! Environment variables:
-//! - NUMWARS_DIMS: Vector dimension (default: 1536)
+//! - NUMWARS_DIMS: Vector dimension (default: 2048)
 //! - NUMWARS_BATCH_SIZE: Number of rows in each matrix (default: 1000)
 //! - NUMWARS_FILTER: Regex to filter benchmark names
 //!
@@ -25,7 +25,7 @@ use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion, Thro
 use nalgebra::DMatrix;
 use ndarray::Array2;
 use num_traits::{Float, Num, NumCast, Zero};
-use numkong::{u1x8, Angulars, Euclideans, PackedMatrix, Tensor};
+use numkong::{bf16, capabilities, u1x8, Angulars, Euclideans, PackedMatrix, Tensor};
 use std::hint::black_box;
 use std::ops::AddAssign;
 use utils::*;
@@ -49,6 +49,16 @@ impl SpatialType for f64 {
 
 impl SpatialType for i8 {
     type Acc = i32;
+    type Output = f32;
+}
+
+impl SpatialType for u8 {
+    type Acc = i32;
+    type Output = f32;
+}
+
+impl SpatialType for bf16 {
+    type Acc = f32;
     type Output = f32;
 }
 
@@ -256,6 +266,8 @@ impl RunNdarrayAngulars for f64 {
 }
 
 impl RunNdarrayAngulars for i8 {}
+impl RunNdarrayAngulars for u8 {}
+impl RunNdarrayAngulars for bf16 {}
 
 trait RunNalgebraAngulars: Sized {
     fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _a: &[Self], _b: &[Self], _bs: usize, _dim: usize) {}
@@ -308,6 +320,8 @@ impl RunNalgebraAngulars for f64 {
 }
 
 impl RunNalgebraAngulars for i8 {}
+impl RunNalgebraAngulars for u8 {}
+impl RunNalgebraAngulars for bf16 {}
 
 trait RunBaselineEuclideans: Sized {
     fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _a: &[Self], _b: &[Self], _bs: usize, _dim: usize) {}
@@ -390,6 +404,10 @@ impl RunNdarrayEuclideans for f64 {
     }
 }
 
+impl RunNdarrayEuclideans for i8 {}
+impl RunNdarrayEuclideans for u8 {}
+impl RunNdarrayEuclideans for bf16 {}
+
 trait RunNalgebraEuclideans: Sized {
     fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _a: &[Self], _b: &[Self], _bs: usize, _dim: usize) {}
 }
@@ -441,6 +459,10 @@ impl RunNalgebraEuclideans for f64 {
         });
     }
 }
+
+impl RunNalgebraEuclideans for i8 {}
+impl RunNalgebraEuclideans for u8 {}
+impl RunNalgebraEuclideans for bf16 {}
 
 // endregion
 
@@ -500,23 +522,31 @@ where
 
 /// Benchmark N×M angular distance matrix.
 pub fn bench_angulars(c: &mut Criterion) {
+    capabilities::configure_thread();
     let dimension = get_vector_dims();
     let batch_size = get_batch_size();
     bench_angulars_dtype(c, "f32", batch_size, dimension, 1.0f32);
     bench_angulars_dtype(c, "f64", batch_size, dimension, 1.0f64);
     bench_angulars_dtype(c, "i8", batch_size, dimension, 1i8);
+    bench_angulars_dtype(c, "u8", batch_size, dimension, 1u8);
+    bench_angulars_dtype(c, "bf16", batch_size, dimension, bf16::from_f32(1.0));
 }
 
 /// Benchmark N×M Euclidean distance matrix.
 pub fn bench_euclideans(c: &mut Criterion) {
+    capabilities::configure_thread();
     let dimension = get_vector_dims();
     let batch_size = get_batch_size();
     bench_euclideans_dtype(c, "f32", batch_size, dimension, 1.0f32);
     bench_euclideans_dtype(c, "f64", batch_size, dimension, 1.0f64);
+    bench_euclideans_dtype(c, "i8", batch_size, dimension, 1i8);
+    bench_euclideans_dtype(c, "u8", batch_size, dimension, 1u8);
+    bench_euclideans_dtype(c, "bf16", batch_size, dimension, bf16::from_f32(1.0));
 }
 
 /// Benchmark N×M Hamming distance matrix.
 pub fn bench_hammings(c: &mut Criterion) {
+    capabilities::configure_thread();
     let dimension = get_vector_dims();
     let byte_count = dimension.div_ceil(8);
     let batch_size = get_batch_size();
@@ -558,6 +588,7 @@ pub fn bench_hammings(c: &mut Criterion) {
 
 /// Benchmark N×M Jaccard distance matrix.
 pub fn bench_jaccards(c: &mut Criterion) {
+    capabilities::configure_thread();
     let dimension = get_vector_dims();
     let byte_count = dimension.div_ceil(8);
     let batch_size = get_batch_size();

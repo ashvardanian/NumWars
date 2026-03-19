@@ -1,48 +1,52 @@
 [project]
-name = "numwars"
-version = "0.1.0"
-description = "Mixed-precision numerics benchmarks: NumKong vs competitors"
-readme = "README.md"
-requires-python = ">=3.10"
-license = { text = "Apache-2.0" }
-authors = [{ name = "NumWars Contributors" }]
-keywords = ["benchmark", "simd", "numerical", "performance"]
+authors = [{name = "Ash Vardanian"}]
 classifiers = [
-    "Development Status :: 3 - Alpha",
-    "Intended Audience :: Developers",
-    "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: Apache Software License",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Topic :: Scientific/Engineering",
-    "Topic :: Software Development :: Libraries",
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering",
+  "Topic :: Software Development :: Libraries",
 ]
 dependencies = [] # Minimal base
+description = "Mixed-precision numerics benchmarks: NumKong vs competitors"
+keywords = ["benchmark", "simd", "numerical", "performance"]
+license = {text = "Apache-2.0"}
+name = "numwars"
+readme = "README.md"
+requires-python = ">=3.10"
+version = "0.1.0"
 
 [project.optional-dependencies]
-similarity = [
-    "numkong>=6.3.0",
-    "numpy>=2.2",
-    "scipy>=1.15",
-    "scikit-learn>=1.6",
-    "tabulate>=0.9",
-    "ml_dtypes>=0.5.0",
-]
-each = ["numkong>=6.3.0", "numpy>=2.2", "tabulate>=0.9", "ml_dtypes>=0.5.0"]
-dots = ["numkong>=6.3.0", "numpy>=2.2", "tabulate>=0.9", "ml_dtypes>=0.5.0"]
+all = ["numwars[similarity,each,dots,geospatial,mesh,reduce,similarities,ml]"]
+dots = ["numkong>=7.0.0", "numpy>=2.2", "tabulate>=0.9", "ml_dtypes>=0.5.0"]
+each = ["numkong>=7.0.0", "numpy>=2.2", "tabulate>=0.9", "ml_dtypes>=0.5.0"]
+geospatial = ["numkong>=7.0.0", "numpy>=2.2", "geopy>=2.4", "tabulate>=0.9"]
+mesh = ["numkong>=7.0.0", "numpy>=2.2", "scipy>=1.15", "biopython>=1.80", "tabulate>=0.9"]
 ml = ["torch>=2.6", "tensorflow>=2.18", "jax>=0.4"]
-all = ["numwars[similarity,each,dots,ml]"]
+reduce = ["numkong>=7.0.0", "numpy>=2.2", "tabulate>=0.9"]
+similarities = ["numkong>=7.0.0", "numpy>=2.2", "scipy>=1.15", "tabulate>=0.9"]
+similarity = [
+  "numkong>=7.0.0",
+  "numpy>=2.2",
+  "scipy>=1.15",
+  "scikit-learn>=1.6",
+  "tabulate>=0.9",
+  "ml_dtypes>=0.5.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/ashvardanian/NumWars"
-Repository = "https://github.com/ashvardanian/NumWars"
 Issues = "https://github.com/ashvardanian/NumWars/issues"
+Repository = "https://github.com/ashvardanian/NumWars"
 
 [build-system]
-requires = ["hatchling"]
 build-backend = "hatchling.build"
+requires = ["hatchling"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["."]

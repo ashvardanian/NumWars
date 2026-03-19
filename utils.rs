@@ -214,6 +214,16 @@ impl BaselineConvert<i32> for i8 {
         self as i32
     }
 }
+impl BaselineConvert<i32> for u8 {
+    fn to_acc(self) -> i32 {
+        self as i32
+    }
+}
+impl BaselineConvert<u32> for u8 {
+    fn to_acc(self) -> u32 {
+        self as u32
+    }
+}
 impl BaselineConvert<f32> for numkong::f16 {
     fn to_acc(self) -> f32 {
         self.to_f32()
@@ -352,28 +362,28 @@ pub fn calculate_ops_per_sec(operations: usize, duration_secs: f64) -> f64 {
     }
 }
 
-/// Format operations per second with auto-scaling units.
+/// Format scalar operations per second with auto-scaling units.
 ///
 /// Similar to StringWars CUPS (Characters Used Per Second) formatter.
-/// Automatically selects appropriate scale: Ops, KiloOps, MegaOps, GigaOps, TeraOps.
+/// Automatically selects appropriate scale: SO/s, KSO/s, MSO/s, GSO/s, TSO/s.
 ///
 /// # Examples
 /// ```
 /// let ops_per_sec = 1_234_567_890.0;
-/// assert_eq!(format_ops_per_sec(ops_per_sec), "1.23 GigaOps/s");
+/// assert_eq!(format_ops_per_sec(ops_per_sec), "1.23 GSO/s");
 /// ```
 #[allow(dead_code)]
 pub fn format_ops_per_sec(ops_per_sec: f64) -> String {
     if ops_per_sec >= 1e12 {
-        format!("{:.2} TeraOps/s", ops_per_sec / 1e12)
+        format!("{:.2} TSO/s", ops_per_sec / 1e12)
     } else if ops_per_sec >= 1e9 {
-        format!("{:.2} GigaOps/s", ops_per_sec / 1e9)
+        format!("{:.2} GSO/s", ops_per_sec / 1e9)
     } else if ops_per_sec >= 1e6 {
-        format!("{:.2} MegaOps/s", ops_per_sec / 1e6)
+        format!("{:.2} MSO/s", ops_per_sec / 1e6)
     } else if ops_per_sec >= 1e3 {
-        format!("{:.2} KiloOps/s", ops_per_sec / 1e3)
+        format!("{:.2} KSO/s", ops_per_sec / 1e3)
     } else {
-        format!("{:.2} Ops/s", ops_per_sec)
+        format!("{:.2} SO/s", ops_per_sec)
     }
 }
 
@@ -461,21 +471,21 @@ pub fn format_bytes(bytes: usize) -> String {
 /// Used in dots/ module for matrix multiplication benchmarks.
 #[allow(dead_code)]
 pub fn get_matrix_dims_width() -> usize {
-    get_env_parsed("NUMWARS_DIMS_WIDTH", 1024)
+    get_env_parsed("NUMWARS_DIMS_WIDTH", 2048)
 }
 
 /// Get matrix output height (m in C = A @ B.T where C is m×n).
 /// Used in dots/ module for matrix multiplication benchmarks.
 #[allow(dead_code)]
 pub fn get_matrix_dims_height() -> usize {
-    get_env_parsed("NUMWARS_DIMS_HEIGHT", 1024)
+    get_env_parsed("NUMWARS_DIMS_HEIGHT", 2048)
 }
 
 /// Get matrix shared dimension (k in A @ B.T where A is m×k and B is n×k).
 /// Used in dots/ module for matrix multiplication benchmarks.
 #[allow(dead_code)]
 pub fn get_matrix_dims_depth() -> usize {
-    get_env_parsed("NUMWARS_DIMS_DEPTH", 1024)
+    get_env_parsed("NUMWARS_DIMS_DEPTH", 2048)
 }
 
 /// Get tensor dimensions for elementwise operations.
@@ -489,7 +499,7 @@ pub fn get_tensor_dims() -> usize {
 /// Used in similarity/ module for pairwise vector similarity benchmarks.
 #[allow(dead_code)]
 pub fn get_vector_dims() -> usize {
-    get_env_parsed("NUMWARS_DIMS", 1536)
+    get_env_parsed("NUMWARS_DIMS", 2048)
 }
 
 /// Get batch size for similarity operations.
@@ -515,7 +525,7 @@ pub fn get_thread_count() -> usize {
 /// Example benchmark names:
 /// - "similarity/angular/f32"
 /// - "each/add/f64"
-/// - "dots/numkong/f32/1024x1024x1024/8t"
+/// - "dots/f32/1024x1024x1024"
 ///
 /// Example filters:
 /// - NUMWARS_FILTER="f32" → only f32 benchmarks

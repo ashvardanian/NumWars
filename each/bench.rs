@@ -22,7 +22,7 @@ mod utils;
 use criterion::measurement::WallTime;
 use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion, Throughput};
 use num_traits::Float;
-use numkong::{bf16, f16, EachATan, EachBlend, EachCos, EachFMA, EachScale, EachSin, EachSum};
+use numkong::{bf16, capabilities, f16, EachATan, EachBlend, EachCos, EachFMA, EachScale, EachSin, EachSum};
 use std::hint::black_box;
 use std::ops::{Add, Mul};
 use utils::*;
@@ -681,6 +681,7 @@ where
 // region: Entry points
 
 pub fn bench_sum(c: &mut Criterion) {
+    capabilities::configure_thread();
     let size = get_tensor_dims();
     bench_each_op_dtype(c, EachOp::Sum, "f32", size, 1.0f32);
     bench_each_op_dtype(c, EachOp::Sum, "f64", size, 1.0f64);
