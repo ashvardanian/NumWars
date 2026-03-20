@@ -255,6 +255,18 @@ Alternatives:
 ndarray Q @ Dᵀ max-reduce f32 → f32            ██▋                             38.36 GSO/s
 ```
 
+Compared to Python:
+
+```text
+NumKong:
+numkong.maxsim_packed f16 → f32   ███████████████████████████████████████████ 833.26 GSO/s
+numkong.maxsim_packed f32 → f64   ████████████████████████████████████████▏   776.43 GSO/s
+numkong.maxsim_packed bf16 → f32  ██████████████████████▏                     428.56 GSO/s
+
+Alternatives:
+numpy matmul f32 → f32            ██████▋                                     129.03 GSO/s
+```
+
 See [maxsim/README.md](maxsim/README.md) for details.
 
 ### Geospatial Distances
