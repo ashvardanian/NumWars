@@ -7,13 +7,14 @@ Batch geodesic distance benchmarks comparing NumKong against the geo and geopy l
 | Library              | Precision   |       MP/s |
 | :------------------- | :---------- | ---------: |
 | ___Haversine___      |             |            |
-| `numkong::haversine` | _f32 → f32_ | __501.31__ |
-| `numkong::haversine` | _f64 → f64_ | __148.33__ |
-| `geo::GeoHaversine`  | _f64 → f64_ |      24.26 |
+| `numkong::haversine` | _f32 → f32_ | __486.92__ |
+| `numkong::haversine` | _f64 → f64_ | __151.65__ |
+| `geo::GeoHaversine`  | _f32 → f32_ |      38.88 |
+| `geo::GeoHaversine`  | _f64 → f64_ |      24.07 |
 | ___Vincenty___       |             |            |
-| `numkong::vincenty`  | _f32 → f32_ |  __55.87__ |
-| `numkong::vincenty`  | _f64 → f64_ |  __17.49__ |
-| `geo::Geodesic`      | _f64 → f64_ |       1.16 |
+| `numkong::vincenty`  | _f32 → f32_ |  __68.96__ |
+| `numkong::vincenty`  | _f64 → f64_ |  __17.79__ |
+| `geo::Geodesic`      | _f64 → f64_ |       1.15 |
 
 ## Python
 
@@ -22,12 +23,10 @@ Batch geodesic distance benchmarks comparing NumKong against the geo and geopy l
 | ___Haversine___      |             |            |
 | `numkong.haversine`  | _f32 → f32_ | __475.41__ |
 | `numkong.haversine`  | _f64 → f64_ | __154.92__ |
-| `geopy.great_circle` | _f32 → f64_ |       0.17 |
 | `geopy.great_circle` | _f64 → f64_ |       0.18 |
 | ___Vincenty___       |             |            |
 | `numkong.vincenty`   | _f32 → f32_ |  __54.99__ |
 | `numkong.vincenty`   | _f64 → f64_ |  __17.87__ |
-| `geopy.geodesic`     | _f32 → f64_ |       0.01 |
 | `geopy.geodesic`     | _f64 → f64_ |       0.01 |
 
 ## Run It

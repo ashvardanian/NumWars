@@ -370,19 +370,6 @@ def main() -> None:
             ),
         ),
         (
-            "geospatial/haversine/geopy/f32",
-            lambda: benchmark_geopy(
-                "haversine",
-                great_circle,
-                a_lats,
-                a_lons,
-                b_lats,
-                b_lons,
-                args.warmup,
-                args.time_limit,
-            ),
-        ),
-        (
             "geospatial/haversine/geopy/f64",
             lambda: benchmark_geopy(
                 "haversine",
@@ -443,19 +430,6 @@ def main() -> None:
                 a_lons64,
                 b_lats64,
                 b_lons64,
-                args.warmup,
-                args.time_limit,
-            ),
-        ),
-        (
-            "geospatial/vincenty/geopy/f32",
-            lambda: benchmark_geopy(
-                "vincenty",
-                geodesic,
-                a_lats,
-                a_lons,
-                b_lats,
-                b_lons,
                 args.warmup,
                 args.time_limit,
             ),

@@ -267,14 +267,15 @@ Compared to Rust projects, it means:
 
 ```text
 NumKong:
-numkong::haversine f32 → f32      ████████████████████████████████████████████ 501.31 MP/s
-numkong::haversine f64 → f64      █████████████                                148.33 MP/s
-numkong::vincenty f32 → f32       █████                                         55.87 MP/s
-numkong::vincenty f64 → f64       █▋                                            17.49 MP/s
+numkong::haversine f32 → f32      ████████████████████████████████████████████ 486.92 MP/s
+numkong::haversine f64 → f64      █████████████▊                               151.65 MP/s
+numkong::vincenty f32 → f32       ██████▍                                       68.96 MP/s
+numkong::vincenty f64 → f64       █▋                                            17.79 MP/s
 
 Alternatives:
-geo::Haversine distance f64 → f64 ██▏                                           24.26 MP/s
-geo::Vincenty distance f64 → f64  ▏                                              1.16 MP/s
+geo::Haversine distance f32 → f32 ███▋                                          38.88 MP/s
+geo::Haversine distance f64 → f64 ██▎                                           24.07 MP/s
+geo::Vincenty distance f64 → f64  ▏                                              1.15 MP/s
 ```
 
 Compared to Python and its alternatives:
@@ -287,9 +288,7 @@ numkong.vincenty f32 → f32            ████▊                         
 numkong.vincenty f64 → f64            █▌                                        17.87 MP/s
 
 Alternatives:
-geopy.distance.great_circle f32 → f64                                            0.17 MP/s
 geopy.distance.great_circle f64 → f64                                            0.18 MP/s
-geopy.distance.geodesic f32 → f64                                              0.0099 MP/s
 geopy.distance.geodesic f64 → f64                                              0.0096 MP/s
 ```
 

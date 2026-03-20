@@ -20,7 +20,7 @@ mod utils;
 
 use criterion::measurement::WallTime;
 use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion, Throughput};
-use geo::{point, Distance, Geodesic, Haversine as GeoHaversine};
+use geo::{Distance, Geodesic, Haversine as GeoHaversine, Point as GeoPoint};
 use num_traits::Float;
 use numkong::{capabilities, Haversine, Vincenty};
 use rand::distr::uniform::SampleUniform;
@@ -190,47 +190,17 @@ fn generate_random_coords<T: SampleUniform + PartialOrd + Copy>(
     (0..count).map(|_| rng.random_range(min..max)).collect()
 }
 
-trait GeoScalar: Float + SampleUniform + Copy + 'static {
-    fn to_f64(self) -> f64;
-}
-
-impl GeoScalar for f32 {
-    fn to_f64(self) -> f64 {
-        self as f64
-    }
-}
-
-impl GeoScalar for f64 {
-    fn to_f64(self) -> f64 {
-        self
-    }
-}
-
-fn to_geo_points<T: GeoScalar>(lats: &[T], lons: &[T]) -> Vec<geo::Point> {
-    lats.iter()
-        .zip(lons)
-        .map(|(&lat, &lon)| point!(x: lon.to_f64(), y: lat.to_f64()))
-        .collect()
-}
-
 // endregion
 
-// region: Per-library Run traits
+// region: Per-library Run traits — Haversine
 
-trait RunBaselineHaversine: Float + Sized {
-    fn run(
-        _g: &mut BenchmarkGroup<'_, WallTime>,
-        _a_lats: &[Self],
-        _a_lons: &[Self],
-        _b_lats: &[Self],
-        _b_lons: &[Self],
-    ) {
-    }
+trait RunBaselineHaversine: Sized {
+    fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _al: &[Self], _ao: &[Self], _bl: &[Self], _bo: &[Self]) {}
 }
 
-impl<T: Float> RunBaselineHaversine for T {
-    fn run(group: &mut BenchmarkGroup<'_, WallTime>, a_lats: &[T], a_lons: &[T], b_lats: &[T], b_lons: &[T]) {
-        let mut results = vec![T::zero(); a_lats.len()];
+impl RunBaselineHaversine for f32 {
+    fn run(group: &mut BenchmarkGroup<'_, WallTime>, a_lats: &[f32], a_lons: &[f32], b_lats: &[f32], b_lons: &[f32]) {
+        let mut results = vec![0.0f32; a_lats.len()];
         group.bench_function("baseline", |bench| {
             bench.iter(|| {
                 black_box(baseline_haversine_batch(a_lats, a_lons, b_lats, b_lons, &mut results));
@@ -240,20 +210,37 @@ impl<T: Float> RunBaselineHaversine for T {
     }
 }
 
-trait RunNumKongHaversine: Haversine + Float + Sized {
-    fn run(
-        _g: &mut BenchmarkGroup<'_, WallTime>,
-        _a_lats: &[Self],
-        _a_lons: &[Self],
-        _b_lats: &[Self],
-        _b_lons: &[Self],
-    ) {
+impl RunBaselineHaversine for f64 {
+    fn run(group: &mut BenchmarkGroup<'_, WallTime>, a_lats: &[f64], a_lons: &[f64], b_lats: &[f64], b_lons: &[f64]) {
+        let mut results = vec![0.0f64; a_lats.len()];
+        group.bench_function("baseline", |bench| {
+            bench.iter(|| {
+                black_box(baseline_haversine_batch(a_lats, a_lons, b_lats, b_lons, &mut results));
+                black_box(&results);
+            })
+        });
     }
 }
 
-impl<T: Haversine + Float> RunNumKongHaversine for T {
-    fn run(group: &mut BenchmarkGroup<'_, WallTime>, a_lats: &[T], a_lons: &[T], b_lats: &[T], b_lons: &[T]) {
-        let mut results = vec![T::zero(); a_lats.len()];
+trait RunNumKongHaversine: Sized {
+    fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _al: &[Self], _ao: &[Self], _bl: &[Self], _bo: &[Self]) {}
+}
+
+impl RunNumKongHaversine for f32 {
+    fn run(group: &mut BenchmarkGroup<'_, WallTime>, a_lats: &[f32], a_lons: &[f32], b_lats: &[f32], b_lons: &[f32]) {
+        let mut results = vec![0.0f32; a_lats.len()];
+        group.bench_function("numkong", |bench| {
+            bench.iter(|| {
+                black_box(Haversine::haversine(a_lats, a_lons, b_lats, b_lons, &mut results));
+                black_box(&results);
+            })
+        });
+    }
+}
+
+impl RunNumKongHaversine for f64 {
+    fn run(group: &mut BenchmarkGroup<'_, WallTime>, a_lats: &[f64], a_lons: &[f64], b_lats: &[f64], b_lons: &[f64]) {
+        let mut results = vec![0.0f64; a_lats.len()];
         group.bench_function("numkong", |bench| {
             bench.iter(|| {
                 black_box(Haversine::haversine(a_lats, a_lons, b_lats, b_lons, &mut results));
@@ -264,20 +251,45 @@ impl<T: Haversine + Float> RunNumKongHaversine for T {
 }
 
 trait RunGeoHaversine: Sized {
-    fn run(
-        _g: &mut BenchmarkGroup<'_, WallTime>,
-        _a_lats: &[Self],
-        _a_lons: &[Self],
-        _b_lats: &[Self],
-        _b_lons: &[Self],
-    ) {
+    fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _al: &[Self], _ao: &[Self], _bl: &[Self], _bo: &[Self]) {}
+}
+
+impl RunGeoHaversine for f32 {
+    fn run(group: &mut BenchmarkGroup<'_, WallTime>, a_lats: &[f32], a_lons: &[f32], b_lats: &[f32], b_lons: &[f32]) {
+        let points_a: Vec<GeoPoint<f32>> = a_lats
+            .iter()
+            .zip(a_lons)
+            .map(|(&la, &lo)| GeoPoint::new(lo, la))
+            .collect();
+        let points_b: Vec<GeoPoint<f32>> = b_lats
+            .iter()
+            .zip(b_lons)
+            .map(|(&la, &lo)| GeoPoint::new(lo, la))
+            .collect();
+        let mut results = vec![0.0f32; points_a.len()];
+        group.bench_function("geo", |bench| {
+            bench.iter(|| {
+                for (i, (a, b)) in points_a.iter().zip(&points_b).enumerate() {
+                    results[i] = GeoHaversine.distance(*a, *b);
+                }
+                black_box(&results);
+            })
+        });
     }
 }
 
-impl<T: GeoScalar> RunGeoHaversine for T {
-    fn run(group: &mut BenchmarkGroup<'_, WallTime>, a_lats: &[T], a_lons: &[T], b_lats: &[T], b_lons: &[T]) {
-        let points_a = to_geo_points(a_lats, a_lons);
-        let points_b = to_geo_points(b_lats, b_lons);
+impl RunGeoHaversine for f64 {
+    fn run(group: &mut BenchmarkGroup<'_, WallTime>, a_lats: &[f64], a_lons: &[f64], b_lats: &[f64], b_lons: &[f64]) {
+        let points_a: Vec<GeoPoint<f64>> = a_lats
+            .iter()
+            .zip(a_lons)
+            .map(|(&la, &lo)| GeoPoint::new(lo, la))
+            .collect();
+        let points_b: Vec<GeoPoint<f64>> = b_lats
+            .iter()
+            .zip(b_lons)
+            .map(|(&la, &lo)| GeoPoint::new(lo, la))
+            .collect();
         let mut results = vec![0.0f64; points_a.len()];
         group.bench_function("geo", |bench| {
             bench.iter(|| {
@@ -290,20 +302,17 @@ impl<T: GeoScalar> RunGeoHaversine for T {
     }
 }
 
-trait RunBaselineVincenty: Float + Sized {
-    fn run(
-        _g: &mut BenchmarkGroup<'_, WallTime>,
-        _a_lats: &[Self],
-        _a_lons: &[Self],
-        _b_lats: &[Self],
-        _b_lons: &[Self],
-    ) {
-    }
+// endregion
+
+// region: Per-library Run traits — Vincenty
+
+trait RunBaselineVincenty: Sized {
+    fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _al: &[Self], _ao: &[Self], _bl: &[Self], _bo: &[Self]) {}
 }
 
-impl<T: Float> RunBaselineVincenty for T {
-    fn run(group: &mut BenchmarkGroup<'_, WallTime>, a_lats: &[T], a_lons: &[T], b_lats: &[T], b_lons: &[T]) {
-        let mut results = vec![T::zero(); a_lats.len()];
+impl RunBaselineVincenty for f32 {
+    fn run(group: &mut BenchmarkGroup<'_, WallTime>, a_lats: &[f32], a_lons: &[f32], b_lats: &[f32], b_lons: &[f32]) {
+        let mut results = vec![0.0f32; a_lats.len()];
         group.bench_function("baseline", |bench| {
             bench.iter(|| {
                 black_box(baseline_vincenty_batch(a_lats, a_lons, b_lats, b_lons, &mut results));
@@ -313,20 +322,37 @@ impl<T: Float> RunBaselineVincenty for T {
     }
 }
 
-trait RunNumKongVincenty: Vincenty + Float + Sized {
-    fn run(
-        _g: &mut BenchmarkGroup<'_, WallTime>,
-        _a_lats: &[Self],
-        _a_lons: &[Self],
-        _b_lats: &[Self],
-        _b_lons: &[Self],
-    ) {
+impl RunBaselineVincenty for f64 {
+    fn run(group: &mut BenchmarkGroup<'_, WallTime>, a_lats: &[f64], a_lons: &[f64], b_lats: &[f64], b_lons: &[f64]) {
+        let mut results = vec![0.0f64; a_lats.len()];
+        group.bench_function("baseline", |bench| {
+            bench.iter(|| {
+                black_box(baseline_vincenty_batch(a_lats, a_lons, b_lats, b_lons, &mut results));
+                black_box(&results);
+            })
+        });
     }
 }
 
-impl<T: Vincenty + Float> RunNumKongVincenty for T {
-    fn run(group: &mut BenchmarkGroup<'_, WallTime>, a_lats: &[T], a_lons: &[T], b_lats: &[T], b_lons: &[T]) {
-        let mut results = vec![T::zero(); a_lats.len()];
+trait RunNumKongVincenty: Sized {
+    fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _al: &[Self], _ao: &[Self], _bl: &[Self], _bo: &[Self]) {}
+}
+
+impl RunNumKongVincenty for f32 {
+    fn run(group: &mut BenchmarkGroup<'_, WallTime>, a_lats: &[f32], a_lons: &[f32], b_lats: &[f32], b_lons: &[f32]) {
+        let mut results = vec![0.0f32; a_lats.len()];
+        group.bench_function("numkong", |bench| {
+            bench.iter(|| {
+                black_box(Vincenty::vincenty(a_lats, a_lons, b_lats, b_lons, &mut results));
+                black_box(&results);
+            })
+        });
+    }
+}
+
+impl RunNumKongVincenty for f64 {
+    fn run(group: &mut BenchmarkGroup<'_, WallTime>, a_lats: &[f64], a_lons: &[f64], b_lats: &[f64], b_lons: &[f64]) {
+        let mut results = vec![0.0f64; a_lats.len()];
         group.bench_function("numkong", |bench| {
             bench.iter(|| {
                 black_box(Vincenty::vincenty(a_lats, a_lons, b_lats, b_lons, &mut results));
@@ -337,20 +363,23 @@ impl<T: Vincenty + Float> RunNumKongVincenty for T {
 }
 
 trait RunGeoVincenty: Sized {
-    fn run(
-        _g: &mut BenchmarkGroup<'_, WallTime>,
-        _a_lats: &[Self],
-        _a_lons: &[Self],
-        _b_lats: &[Self],
-        _b_lons: &[Self],
-    ) {
-    }
+    fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _al: &[Self], _ao: &[Self], _bl: &[Self], _bo: &[Self]) {}
 }
 
-impl<T: GeoScalar> RunGeoVincenty for T {
-    fn run(group: &mut BenchmarkGroup<'_, WallTime>, a_lats: &[T], a_lons: &[T], b_lats: &[T], b_lons: &[T]) {
-        let points_a = to_geo_points(a_lats, a_lons);
-        let points_b = to_geo_points(b_lats, b_lons);
+impl RunGeoVincenty for f32 {}
+
+impl RunGeoVincenty for f64 {
+    fn run(group: &mut BenchmarkGroup<'_, WallTime>, a_lats: &[f64], a_lons: &[f64], b_lats: &[f64], b_lons: &[f64]) {
+        let points_a: Vec<GeoPoint<f64>> = a_lats
+            .iter()
+            .zip(a_lons)
+            .map(|(&la, &lo)| GeoPoint::new(lo, la))
+            .collect();
+        let points_b: Vec<GeoPoint<f64>> = b_lats
+            .iter()
+            .zip(b_lons)
+            .map(|(&la, &lo)| GeoPoint::new(lo, la))
+            .collect();
         let mut results = vec![0.0f64; points_a.len()];
         group.bench_function("geo", |bench| {
             bench.iter(|| {
@@ -369,21 +398,18 @@ impl<T: GeoScalar> RunGeoVincenty for T {
 
 fn bench_haversine_dtype<T>(c: &mut Criterion, rng: &mut impl Rng, dtype: &str, count: usize)
 where
-    T: GeoScalar + RunBaselineHaversine + RunNumKongHaversine + RunGeoHaversine,
+    T: Float + SampleUniform + RunNumKongHaversine + RunBaselineHaversine + RunGeoHaversine + 'static,
 {
     let name = format!("geospatial/haversine/{dtype}");
     if !should_run_benchmark(&name) {
         return;
     }
-
     let mut group = c.benchmark_group(name);
     group.throughput(Throughput::Bytes((count * std::mem::size_of::<T>() * 4) as u64));
-
     let a_lats = generate_random_coords(rng, count, T::from(-90.0).unwrap(), T::from(90.0).unwrap());
     let a_lons = generate_random_coords(rng, count, T::from(-180.0).unwrap(), T::from(180.0).unwrap());
     let b_lats = generate_random_coords(rng, count, T::from(-90.0).unwrap(), T::from(90.0).unwrap());
     let b_lons = generate_random_coords(rng, count, T::from(-180.0).unwrap(), T::from(180.0).unwrap());
-
     <T as RunNumKongHaversine>::run(&mut group, &a_lats, &a_lons, &b_lats, &b_lons);
     <T as RunBaselineHaversine>::run(&mut group, &a_lats, &a_lons, &b_lats, &b_lons);
     <T as RunGeoHaversine>::run(&mut group, &a_lats, &a_lons, &b_lats, &b_lons);
@@ -392,21 +418,18 @@ where
 
 fn bench_vincenty_dtype<T>(c: &mut Criterion, rng: &mut impl Rng, dtype: &str, count: usize)
 where
-    T: GeoScalar + RunBaselineVincenty + RunNumKongVincenty + RunGeoVincenty,
+    T: Float + SampleUniform + RunNumKongVincenty + RunBaselineVincenty + RunGeoVincenty + 'static,
 {
     let name = format!("geospatial/vincenty/{dtype}");
     if !should_run_benchmark(&name) {
         return;
     }
-
     let mut group = c.benchmark_group(name);
     group.throughput(Throughput::Bytes((count * std::mem::size_of::<T>() * 4) as u64));
-
     let a_lats = generate_random_coords(rng, count, T::from(-90.0).unwrap(), T::from(90.0).unwrap());
     let a_lons = generate_random_coords(rng, count, T::from(-180.0).unwrap(), T::from(180.0).unwrap());
     let b_lats = generate_random_coords(rng, count, T::from(-90.0).unwrap(), T::from(90.0).unwrap());
     let b_lons = generate_random_coords(rng, count, T::from(-180.0).unwrap(), T::from(180.0).unwrap());
-
     <T as RunNumKongVincenty>::run(&mut group, &a_lats, &a_lons, &b_lats, &b_lons);
     <T as RunBaselineVincenty>::run(&mut group, &a_lats, &a_lons, &b_lats, &b_lons);
     <T as RunGeoVincenty>::run(&mut group, &a_lats, &a_lons, &b_lats, &b_lons);
