@@ -6,11 +6,10 @@ Mesh alignment benchmarks: NumKong vs Python alternatives.
 Benchmarks RMSD and Kabsch alignment over 3D point clouds:
 - NumKong: nk.rmsd / nk.kabsch
 - NumPy: manual RMSD via array ops
-- SciPy: Rotation.align_vectors (Kabsch)
 - BioPython: SVDSuperimposer (Kabsch)
 
 Can be run with uv:
-    uv run --with numkong,numpy,scipy,biopython,tabulate mesh/bench.py
+    uv run --with numkong,numpy,biopython,tabulate mesh/bench.py
 
 Or with traditional pip:
     pip install -e ".[mesh]"
@@ -40,6 +39,7 @@ try:
         calculate_mps,
         get_batch_size,
         measure_average_duration,
+        normalize_dtype_name,
         print_results_table,
         should_run_benchmark,
     )
@@ -59,11 +59,13 @@ class BenchmarkResult:
     primary_value: float
 
 
-def build_point_clouds(count: int, seed: int) -> tuple[np.ndarray, np.ndarray]:
-    """Generate two random (N, 3) float32 point clouds."""
+def build_point_clouds(
+    count: int, seed: int, dtype=np.float32
+) -> tuple[np.ndarray, np.ndarray]:
+    """Generate two random (N, 3) point clouds of the given dtype."""
     rng = np.random.default_rng(seed)
-    source = rng.standard_normal((count, 3)).astype(np.float32)
-    target = rng.standard_normal((count, 3)).astype(np.float32)
+    source = rng.standard_normal((count, 3)).astype(dtype)
+    target = rng.standard_normal((count, 3)).astype(dtype)
     return source, target
 
 
@@ -82,7 +84,7 @@ def benchmark_numkong_rmsd(
     return BenchmarkResult(
         workload="rmsd",
         library="NumKong",
-        input_dtype="f32",
+        input_dtype=normalize_dtype_name(source.dtype),
         output_dtype="f64",
         count=count,
         duration_secs=duration,
@@ -105,7 +107,7 @@ def benchmark_numpy_rmsd(
     return BenchmarkResult(
         workload="rmsd",
         library="NumPy",
-        input_dtype="f32",
+        input_dtype=normalize_dtype_name(source.dtype),
         output_dtype="f64",
         count=count,
         duration_secs=duration,
@@ -128,36 +130,7 @@ def benchmark_numkong_kabsch(
     return BenchmarkResult(
         workload="kabsch",
         library="NumKong",
-        input_dtype="f32",
-        output_dtype="f64",
-        count=count,
-        duration_secs=duration,
-        primary_value=calculate_mps(count, duration),
-    )
-
-
-def benchmark_scipy_kabsch(
-    source: np.ndarray,
-    target: np.ndarray,
-    warmup: float,
-    profile: float,
-) -> BenchmarkResult:
-    try:
-        from scipy.spatial.transform import Rotation
-    except ImportError:
-        print("Warning: scipy not found, skipping scipy kabsch benchmark.")
-        return None
-
-    count = source.shape[0]
-    duration = measure_average_duration(
-        lambda: Rotation.align_vectors(target, source),
-        warmup,
-        profile,
-    )
-    return BenchmarkResult(
-        workload="kabsch",
-        library="SciPy",
-        input_dtype="f32",
+        input_dtype=normalize_dtype_name(source.dtype),
         output_dtype="f64",
         count=count,
         duration_secs=duration,
@@ -188,7 +161,7 @@ def benchmark_biopython_kabsch(
     return BenchmarkResult(
         workload="kabsch",
         library="BioPython",
-        input_dtype="f32",
+        input_dtype=normalize_dtype_name(source.dtype),
         output_dtype="f64",
         count=count,
         duration_secs=duration,
@@ -211,7 +184,7 @@ def benchmark_numkong_umeyama(
     return BenchmarkResult(
         workload="umeyama",
         library="NumKong",
-        input_dtype="f32",
+        input_dtype=normalize_dtype_name(source.dtype),
         output_dtype="f64",
         count=count,
         duration_secs=duration,
@@ -262,6 +235,7 @@ def main() -> None:
             sys.exit(2)
 
     source, target = build_point_clouds(args.count, args.seed)
+    source64, target64 = build_point_clouds(args.count, args.seed, dtype=np.float64)
     benchmarks = [
         (
             "mesh/rmsd/numkong/f32",
@@ -270,8 +244,20 @@ def main() -> None:
             ),
         ),
         (
+            "mesh/rmsd/numkong/f64",
+            lambda: benchmark_numkong_rmsd(
+                source64, target64, args.warmup, args.time_limit
+            ),
+        ),
+        (
             "mesh/rmsd/numpy/f32",
             lambda: benchmark_numpy_rmsd(source, target, args.warmup, args.time_limit),
+        ),
+        (
+            "mesh/rmsd/numpy/f64",
+            lambda: benchmark_numpy_rmsd(
+                source64, target64, args.warmup, args.time_limit
+            ),
         ),
         (
             "mesh/kabsch/numkong/f32",
@@ -280,9 +266,9 @@ def main() -> None:
             ),
         ),
         (
-            "mesh/kabsch/scipy/f32",
-            lambda: benchmark_scipy_kabsch(
-                source, target, args.warmup, args.time_limit
+            "mesh/kabsch/numkong/f64",
+            lambda: benchmark_numkong_kabsch(
+                source64, target64, args.warmup, args.time_limit
             ),
         ),
         (
@@ -292,9 +278,21 @@ def main() -> None:
             ),
         ),
         (
+            "mesh/kabsch/biopython/f64",
+            lambda: benchmark_biopython_kabsch(
+                source64, target64, args.warmup, args.time_limit
+            ),
+        ),
+        (
             "mesh/umeyama/numkong/f32",
             lambda: benchmark_numkong_umeyama(
                 source, target, args.warmup, args.time_limit
+            ),
+        ),
+        (
+            "mesh/umeyama/numkong/f64",
+            lambda: benchmark_numkong_umeyama(
+                source64, target64, args.warmup, args.time_limit
             ),
         ),
     ]

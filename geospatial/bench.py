@@ -65,13 +65,13 @@ class BenchmarkResult:
 
 
 def build_coords(
-    count: int, seed: int
+    count: int, seed: int, dtype=np.float32
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     rng = np.random.default_rng(seed)
-    a_lats = rng.uniform(-90.0, 90.0, size=count).astype(np.float32)
-    a_lons = rng.uniform(-180.0, 180.0, size=count).astype(np.float32)
-    b_lats = rng.uniform(-90.0, 90.0, size=count).astype(np.float32)
-    b_lons = rng.uniform(-180.0, 180.0, size=count).astype(np.float32)
+    a_lats = rng.uniform(-90.0, 90.0, size=count).astype(dtype)
+    a_lons = rng.uniform(-180.0, 180.0, size=count).astype(dtype)
+    b_lats = rng.uniform(-90.0, 90.0, size=count).astype(dtype)
+    b_lons = rng.uniform(-180.0, 180.0, size=count).astype(dtype)
     return a_lats, a_lons, b_lats, b_lons
 
 
@@ -182,11 +182,10 @@ def benchmark_numkong(
     warmup: float,
     profile: float,
 ) -> BenchmarkResult:
+    input_dtype = normalize_dtype_name(a_lats.dtype)
     sample_output = func(a_lats, a_lons, b_lats, b_lons)
     output_dtype = normalize_dtype_name(getattr(sample_output, "dtype", a_lats.dtype))
-    out = np.empty(
-        a_lats.shape[0], dtype=np.float32 if output_dtype == "f32" else np.float64
-    )
+    out = np.empty(a_lats.shape[0], dtype=a_lats.dtype)
     duration = measure_average_duration(
         lambda: func(a_lats, a_lons, b_lats, b_lons, out=out),
         warmup,
@@ -195,7 +194,7 @@ def benchmark_numkong(
     return BenchmarkResult(
         workload=workload,
         library="NumKong",
-        input_dtype="f32",
+        input_dtype=input_dtype,
         output_dtype=output_dtype,
         count=a_lats.shape[0],
         duration_secs=duration,
@@ -228,7 +227,7 @@ def benchmark_serial(
     return BenchmarkResult(
         workload=workload,
         library="Serial",
-        input_dtype="f32",
+        input_dtype=normalize_dtype_name(a_lats.dtype),
         output_dtype="f64",
         count=a_lats.shape[0],
         duration_secs=duration,
@@ -261,7 +260,7 @@ def benchmark_geopy(
     return BenchmarkResult(
         workload=workload,
         library="geopy",
-        input_dtype="f32",
+        input_dtype=normalize_dtype_name(a_lats.dtype),
         output_dtype="f64",
         count=len(pairs),
         duration_secs=duration,
@@ -314,6 +313,9 @@ def main() -> None:
             sys.exit(2)
 
     a_lats, a_lons, b_lats, b_lons = build_coords(args.count, args.seed)
+    a_lats64, a_lons64, b_lats64, b_lons64 = build_coords(
+        args.count, args.seed, dtype=np.float64
+    )
     benchmarks = [
         (
             "geospatial/haversine/numkong/f32",
@@ -324,6 +326,19 @@ def main() -> None:
                 a_lons,
                 b_lats,
                 b_lons,
+                args.warmup,
+                args.time_limit,
+            ),
+        ),
+        (
+            "geospatial/haversine/numkong/f64",
+            lambda: benchmark_numkong(
+                "haversine",
+                nk.haversine,
+                a_lats64,
+                a_lons64,
+                b_lats64,
+                b_lons64,
                 args.warmup,
                 args.time_limit,
             ),
@@ -342,6 +357,19 @@ def main() -> None:
             ),
         ),
         (
+            "geospatial/haversine/serial/f64",
+            lambda: benchmark_serial(
+                "haversine",
+                baseline_haversine,
+                a_lats64,
+                a_lons64,
+                b_lats64,
+                b_lons64,
+                args.warmup,
+                args.time_limit,
+            ),
+        ),
+        (
             "geospatial/haversine/geopy/f32",
             lambda: benchmark_geopy(
                 "haversine",
@@ -350,6 +378,19 @@ def main() -> None:
                 a_lons,
                 b_lats,
                 b_lons,
+                args.warmup,
+                args.time_limit,
+            ),
+        ),
+        (
+            "geospatial/haversine/geopy/f64",
+            lambda: benchmark_geopy(
+                "haversine",
+                great_circle,
+                a_lats64,
+                a_lons64,
+                b_lats64,
+                b_lons64,
                 args.warmup,
                 args.time_limit,
             ),
@@ -368,6 +409,19 @@ def main() -> None:
             ),
         ),
         (
+            "geospatial/vincenty/numkong/f64",
+            lambda: benchmark_numkong(
+                "vincenty",
+                nk.vincenty,
+                a_lats64,
+                a_lons64,
+                b_lats64,
+                b_lons64,
+                args.warmup,
+                args.time_limit,
+            ),
+        ),
+        (
             "geospatial/vincenty/serial/f32",
             lambda: benchmark_serial(
                 "vincenty",
@@ -381,6 +435,19 @@ def main() -> None:
             ),
         ),
         (
+            "geospatial/vincenty/serial/f64",
+            lambda: benchmark_serial(
+                "vincenty",
+                baseline_vincenty,
+                a_lats64,
+                a_lons64,
+                b_lats64,
+                b_lons64,
+                args.warmup,
+                args.time_limit,
+            ),
+        ),
+        (
             "geospatial/vincenty/geopy/f32",
             lambda: benchmark_geopy(
                 "vincenty",
@@ -389,6 +456,19 @@ def main() -> None:
                 a_lons,
                 b_lats,
                 b_lons,
+                args.warmup,
+                args.time_limit,
+            ),
+        ),
+        (
+            "geospatial/vincenty/geopy/f64",
+            lambda: benchmark_geopy(
+                "vincenty",
+                geodesic,
+                a_lats64,
+                a_lons64,
+                b_lats64,
+                b_lons64,
                 args.warmup,
                 args.time_limit,
             ),

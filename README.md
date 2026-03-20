@@ -267,24 +267,30 @@ Compared to Rust projects, it means:
 
 ```text
 NumKong:
-numkong::haversine       █████████████████████████████████████████████████████ 564.53 MP/s
-numkong::vincenty        █████▎                                                 57.76 MP/s
+numkong::haversine f32 → f32      ████████████████████████████████████████████ 501.31 MP/s
+numkong::haversine f64 → f64      █████████████                                148.33 MP/s
+numkong::vincenty f32 → f32       █████                                         55.87 MP/s
+numkong::vincenty f64 → f64       █▋                                            17.49 MP/s
 
 Alternatives:
-geo::Haversine distance  ██▍                                                    25.53 MP/s
-geo::Vincenty distance                                                           1.20 MP/s
+geo::Haversine distance f64 → f64 ██▏                                           24.26 MP/s
+geo::Vincenty distance f64 → f64  ▏                                              1.16 MP/s
 ```
 
 Compared to Python and its alternatives:
 
 ```text
 NumKong:
-numkong.haversine            █████████████████████████████████████████████████ 526.05 MP/s
-numkong.vincenty             █████▎                                             57.22 MP/s
+numkong.haversine f32 → f32           ████████████████████████████████████████ 475.41 MP/s
+numkong.haversine f64 → f64           █████████████                            154.92 MP/s
+numkong.vincenty f32 → f32            ████▊                                     54.99 MP/s
+numkong.vincenty f64 → f64            █▌                                        17.87 MP/s
 
 Alternatives:
-geopy.distance.great_circle                                                      0.21 MP/s
-geopy.distance.geodesic                                                        0.0107 MP/s
+geopy.distance.great_circle f32 → f64                                            0.17 MP/s
+geopy.distance.great_circle f64 → f64                                            0.18 MP/s
+geopy.distance.geodesic f32 → f64                                              0.0099 MP/s
+geopy.distance.geodesic f64 → f64                                              0.0096 MP/s
 ```
 
 See [geospatial/README.md](geospatial/README.md) for details.
@@ -298,26 +304,41 @@ In Rust:
 
 ```text
 NumKong:
-numkong::MeshAlignment::rmsd f32 → f64    ████████████████████████████████████ 610.32 MP/s
-numkong::MeshAlignment::kabsch f32 → f64  ██████████████████████               372.86 MP/s
+numkong::MeshAlignment::rmsd f64 → f64      ██████████████████████████████████ 971.35 MP/s
+numkong::MeshAlignment::rmsd f32 → f32      ████████████████████▊              592.73 MP/s
+numkong::MeshAlignment::rmsd f16 → f16      ████████████████████▎              578.61 MP/s
+numkong::MeshAlignment::rmsd bf16 → bf16    ███████████████████▉               567.69 MP/s
+numkong::MeshAlignment::kabsch f32 → f32    ██████████████▏                    404.69 MP/s
+numkong::MeshAlignment::umeyama f32 → f32   ███████████▊                       335.03 MP/s
+numkong::MeshAlignment::kabsch bf16 → bf16  █████████▌                         272.09 MP/s
+numkong::MeshAlignment::umeyama bf16 → bf16 █████████▍                         268.63 MP/s
+numkong::MeshAlignment::kabsch f16 → f16    █████████▎                         264.46 MP/s
+numkong::MeshAlignment::umeyama f16 → f16   █████████▎                         264.89 MP/s
+numkong::MeshAlignment::kabsch f64 → f64    ████████▋                          245.90 MP/s
+numkong::MeshAlignment::umeyama f64 → f64   █████▏                             147.75 MP/s
 
-Reimplmenting with alternatives:
-nalgebra-based RMSD f32 → f32             ███████████▊                         199.14 MP/s
-nalgebra-based Kabsch f32 → f64           ███████▍                             125.14 MP/s
+Alternatives:
+nalgebra-based RMSD f32 → f32               ██████████████████▊                537.04 MP/s
+nalgebra-based Kabsch f32 → f64             ████▎                              121.63 MP/s
+nalgebra-based Umeyama f32 → f64            ███▊                               106.47 MP/s
 ```
 
 Compared to Python and its alternatives:
 
 ```text
 NumKong:
-numkong.rmsd f32 → f64                           █████████████████████████████ 468.79 MP/s
-numkong.kabsch f32 → f64                         ████████████████▏             260.75 MP/s
-numkong.umeyama f32 → f64                        ███████████████               245.37 MP/s
+numkong.rmsd f64 → f64                       █████████████████████████████████ 825.51 MP/s
+numkong.rmsd f32 → f64                       ██████████████████▋               467.35 MP/s
+numkong.kabsch f32 → f64                     █████████▉                        248.48 MP/s
+numkong.umeyama f32 → f64                    █████████▉                        248.10 MP/s
+numkong.kabsch f64 → f64                     █████████▌                        238.79 MP/s
+numkong.umeyama f64 → f64                    ██████▍                           159.25 MP/s
 
 Alternatives:
-numpy-based RMSD f32 → f64                       ███▏                           51.06 MP/s
-scipy Rotation.align_vectors (Kabsch) f32 → f64  ▊                              13.51 MP/s
-biopython SVDSuperimposer (Kabsch) f32 → f64                                     1.32 MP/s
+numpy-based RMSD f32 → f64                   ██▏                                50.49 MP/s
+numpy-based RMSD f64 → f64                   █▉                                 46.74 MP/s
+biopython SVDSuperimposer (Kabsch) f32 → f64                                     1.22 MP/s
+biopython SVDSuperimposer (Kabsch) f64 → f64                                     1.19 MP/s
 ```
 
 See [mesh/README.md](mesh/README.md) for details.
