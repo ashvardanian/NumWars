@@ -372,9 +372,9 @@ pub fn bench_hammings(c: &mut Criterion) {
         let matrix_b_data = vec![u1x8::new(0x55); total_bytes];
         group.throughput(Throughput::Bytes((total_bytes * 2) as u64));
 
-        let tensor_a = Tensor::<u1x8>::try_from_slice(&matrix_a_data, &[batch_size, byte_count])
+        let tensor_a = Tensor::<u1x8>::try_from_slice(&matrix_a_data, &[batch_size, dimension])
             .expect("Failed to create tensor A");
-        let tensor_b = Tensor::<u1x8>::try_from_slice(&matrix_b_data, &[batch_size, byte_count])
+        let tensor_b = Tensor::<u1x8>::try_from_slice(&matrix_b_data, &[batch_size, dimension])
             .expect("Failed to create tensor B");
         let packed_b = PackedMatrix::try_pack(&tensor_b).expect("Failed to pack B");
 
@@ -399,9 +399,9 @@ pub fn bench_jaccards(c: &mut Criterion) {
         let matrix_b_data = vec![u1x8::new(0x55); total_bytes];
         group.throughput(Throughput::Bytes((total_bytes * 2) as u64));
 
-        let tensor_a = Tensor::<u1x8>::try_from_slice(&matrix_a_data, &[batch_size, byte_count])
+        let tensor_a = Tensor::<u1x8>::try_from_slice(&matrix_a_data, &[batch_size, dimension])
             .expect("Failed to create tensor A");
-        let tensor_b = Tensor::<u1x8>::try_from_slice(&matrix_b_data, &[batch_size, byte_count])
+        let tensor_b = Tensor::<u1x8>::try_from_slice(&matrix_b_data, &[batch_size, dimension])
             .expect("Failed to create tensor B");
         let packed_b = PackedMatrix::try_pack(&tensor_b).expect("Failed to pack B");
 
