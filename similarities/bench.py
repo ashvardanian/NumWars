@@ -42,6 +42,7 @@ try:
         add_common_args,
         calculate_gso_per_sec,
         format_duration,
+        get_batch_size,
         get_vector_dims,
         measure_average_duration,
         normalize_dtype_name,
