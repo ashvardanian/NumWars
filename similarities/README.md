@@ -7,46 +7,42 @@ All-pairs distance matrix benchmarks comparing NumKong packed kernels against nd
 | Library                      | Precision    |      GSO/s |
 | :--------------------------- | :----------- | ---------: |
 | ___Angular___                |              |            |
-| `numkong::angulars_packed`   | _u8 → f32_   | __694.88__ |
-| `numkong::angulars_packed`   | _i8 → f32_   | __686.93__ |
-| `numkong::angulars_packed`   | _bf16 → f32_ | __304.59__ |
-| `ndarray::dot`               | _f32 → f32_  |      38.20 |
-| `nalgebra::gemm`             | _f32 → f32_  |      36.97 |
-| `numkong::angulars_packed`   | _f32 → f64_  |  __20.64__ |
-| `ndarray::dot`               | _f64 → f64_  |          ? |
-| `nalgebra::gemm`             | _f64 → f64_  |          ? |
-| `numkong::angulars_packed`   | _f64 → f64_  |          ? |
+| `numkong::angulars_packed`   | _i8 → f32_   | __830.13__ |
+| `numkong::angulars_packed`   | _u8 → f32_   | __830.14__ |
+| `numkong::angulars_packed`   | _bf16 → f32_ | __502.45__ |
+| `numkong::angulars_packed`   | _f32 → f64_  |  __92.52__ |
+| `ndarray angular`            | _f32 → f32_  |      56.98 |
+| `nalgebra angular`           | _f32 → f32_  |      49.95 |
+| `ndarray angular`            | _f64 → f64_  |      28.82 |
+| `nalgebra angular`           | _f64 → f64_  |      27.26 |
+| `numkong::angulars_packed`   | _f64 → f64_  |  __22.81__ |
 | ___Euclidean___              |              |            |
-| `numkong::euclideans_packed` | _i8 → f32_   | __685.67__ |
-| `numkong::euclideans_packed` | _u8 → f32_   | __672.37__ |
-| `numkong::euclideans_packed` | _bf16 → f32_ | __302.61__ |
-| `nalgebra::gemm`             | _f32 → f32_  |      37.91 |
-| `ndarray::dot`               | _f32 → f32_  |      37.59 |
-| `numkong::euclideans_packed` | _f32 → f64_  |  __21.22__ |
-| `ndarray::dot`               | _f64 → f64_  |          ? |
-| `nalgebra::gemm`             | _f64 → f64_  |          ? |
-| `numkong::euclideans_packed` | _f64 → f64_  |          ? |
+| `numkong::euclideans_packed` | _i8 → f32_   | __887.85__ |
+| `numkong::euclideans_packed` | _u8 → f32_   | __888.74__ |
+| `numkong::euclideans_packed` | _bf16 → f32_ | __524.00__ |
+| `numkong::euclideans_packed` | _f32 → f64_  |  __92.93__ |
+| `ndarray euclidean`          | _f32 → f32_  |      57.64 |
+| `nalgebra euclidean`         | _f32 → f32_  |      49.79 |
+| `ndarray euclidean`          | _f64 → f64_  |      28.82 |
+| `nalgebra euclidean`         | _f64 → f64_  |      27.11 |
+| `numkong::euclideans_packed` | _f64 → f64_  |  __22.85__ |
 | ___Hamming___                |              |            |
-| `numkong::hammings_packed`   | _u1x8_       |          ? |
+| `numkong::hammings_packed`   | _u1x8_       |  __9821__ |
 | ___Jaccard___                |              |            |
-| `numkong::jaccards_packed`   | _u1x8_       |          ? |
+| `numkong::jaccards_packed`   | _u1x8_       |  __3173__ |
 
 ## Python
 
-| Library                     | Precision    |      GSO/s |
-| :-------------------------- | :----------- | ---------: |
-| ___Angular___               |              |            |
-| `numkong.angulars_packed`   | _u8 → f32_   | __465.04__ |
-| `numkong.angulars_packed`   | _i8 → f32_   | __454.74__ |
-| `numkong.angulars_packed`   | _bf16 → f32_ | __226.56__ |
-| `numkong.angulars_packed`   | _f32 → f64_  |  __19.84__ |
-| `scipy.cdist`               | _f32 → f64_  |       2.83 |
-| ___Euclidean___             |              |            |
-| `numkong.euclideans_packed` | _u8 → f32_   | __463.47__ |
-| `numkong.euclideans_packed` | _i8 → f32_   | __463.37__ |
-| `numkong.euclideans_packed` | _bf16 → f32_ | __210.12__ |
-| `numkong.euclideans_packed` | _f32 → f64_  |  __20.24__ |
-| `scipy.cdist`               | _f32 → f64_  |       2.62 |
+| Library                     | Precision   |      GSO/s |
+| :-------------------------- | :---------- | ---------: |
+| `numkong.euclideans_packed` | _u8 → f32_  | __425.91__ |
+| `numkong.euclideans_packed` | _i8 → f32_  | __408.64__ |
+| `numkong.angulars_packed`   | _i8 → f32_  | __386.96__ |
+| `numkong.angulars_packed`   | _u8 → f32_  | __364.01__ |
+| `numkong.angulars_packed`   | _f32 → f64_ |  __79.26__ |
+| `numkong.euclideans_packed` | _f32 → f64_ |  __52.95__ |
+| `scipy.cdist euclidean`     | _f32 → f64_ |       5.09 |
+| `scipy.cdist cosine`        | _f32 → f64_ |       1.30 |
 
 ## Run It
 

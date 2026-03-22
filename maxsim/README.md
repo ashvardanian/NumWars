@@ -4,21 +4,21 @@ ColBERT-style late-interaction scoring benchmarks comparing NumKong against ndar
 
 ## Rust
 
-| Library                       | Precision    |      GSO/s |
-| :---------------------------- | :----------- | ---------: |
-| `numkong::MaxSimPackedMatrix` | _f16 → f32_  | __423.69__ |
-| `numkong::MaxSimPackedMatrix` | _f32 → f64_  | __415.47__ |
-| `numkong::MaxSimPackedMatrix` | _bf16 → f32_ | __224.48__ |
-| `ndarray::dot`                | _f32 → f32_  |      38.36 |
+| Library                             | Precision    |       GSO/s |
+| :---------------------------------- | :----------- | ----------: |
+| `numkong::MaxSimPackedMatrix::score`| _f32 → f64_  | __1483.41__ |
+| `numkong::MaxSimPackedMatrix::score`| _bf16 → f32_ |  __983.57__ |
+| `numkong::MaxSimPackedMatrix::score`| _f16 → f32_  |  __980.33__ |
+| ndarray Q @ Dᵀ max-reduce          | _f32 → f32_  |      58.37 |
 
 ## Python
 
-| Library                 | Precision    |      GSO/s |
-| :---------------------- | :----------- | ---------: |
-| `numkong.maxsim_packed` | _f16 → f32_  | __833.26__ |
-| `numkong.maxsim_packed` | _f32 → f64_  | __776.43__ |
-| `numkong.maxsim_packed` | _bf16 → f32_ | __428.56__ |
-| `numpy` matmul          | _f32 → f32_  |     129.03 |
+| Library                 | Precision    |       GSO/s |
+| :---------------------- | :----------- | ----------: |
+| `numkong.maxsim_packed` | _f32 → f64_  | __2425.72__ |
+| `numpy` matmul          | _f32 → f32_  |     1525.56 |
+| `numkong.maxsim_packed` | _bf16 → f32_ | __1236.30__ |
+| `numkong.maxsim_packed` | _f16 → f32_  |  __696.78__ |
 
 ## Run It
 

@@ -6,29 +6,29 @@ Packed GEMM-style matrix multiplication benchmarks comparing NumKong against fae
 
 | Library                         | Precision    |       GSO/s |
 | :------------------------------ | :----------- | ----------: |
-| `numkong::try_dots_packed_into` | _i8 → i32_   | __1357.36__ |
-| `numkong::try_dots_packed_into` | _u8 → i32_   |           ? |
-| `numkong::try_dots_packed_into` | _bf16 → f32_ |  __684.96__ |
-| `numkong::try_dots_packed_into` | _f16 → f32_  |  __106.63__ |
-| `faer::linalg::matmul::matmul`  | _f32 → f32_  |   __81.21__ |
-| `matrixmultiply::sgemm`         | _f32 → f32_  |       78.61 |
-| `ndarray::dot`                  | _f32 → f32_  |       78.55 |
-| `nalgebra::gemm`                | _f32 → f32_  |       74.21 |
-| `numkong::try_dots_packed_into` | _f32 → f64_  |   __42.04__ |
-| `numkong::try_dots_packed_into` | _e4m3 → f32_ |           ? |
-| `numkong::try_dots_packed_into` | _e5m2 → f32_ |           ? |
-| `numkong::try_dots_packed_into` | _e2m3 → f32_ |           ? |
-| `numkong::try_dots_packed_into` | _e3m2 → f32_ |           ? |
+| `numkong::try_dots_packed_into` | _i8 → i32_   | __2783.00__ |
+| `numkong::try_dots_packed_into` | _u8 → i32_   | __2784.10__ |
+| `numkong::try_dots_packed_into` | _bf16 → f32_ | __1250.80__ |
+| `numkong::try_dots_packed_into` | _f16 → f32_  | __1249.70__ |
+| `faer::linalg::matmul::matmul`  | _f32 → f32_  |      117.50 |
+| `matrixmultiply::sgemm`         | _f32 → f32_  |      116.77 |
+| `ndarray::dot`                  | _f32 → f32_  |      117.51 |
+| `nalgebra::gemm`                | _f32 → f32_  |  __118.72__ |
+| `numkong::try_dots_packed_into` | _f32 → f64_  |  __197.79__ |
+| `numkong::try_dots_packed_into` | _e4m3 → f32_ |  __495.25__ |
+| `numkong::try_dots_packed_into` | _e5m2 → f32_ |  __746.22__ |
+| `numkong::try_dots_packed_into` | _e2m3 → f32_ | __1355.00__ |
+| `numkong::try_dots_packed_into` | _e3m2 → f32_ |  __693.43__ |
 
 ## Python
 
 | Library               | Precision    |       GSO/s |
 | :-------------------- | :----------- | ----------: |
-| `numkong.dots_packed` | _i8 → i32_   | __1110.31__ |
-| `numkong.dots_packed` | _bf16 → f32_ |  __487.89__ |
-| `numpy.matmul`        | _f32 → f32_  |  __145.73__ |
-| `numkong.dots_packed` | _f16 → f32_  |   __91.80__ |
-| `numkong.dots_packed` | _f32 → f64_  |   __42.69__ |
+| `numkong.dots_packed` | _i8 → i32_   | __2621.97__ |
+| `numkong.dots_packed` | _bf16 → f32_ | __1142.19__ |
+| `numpy.matmul`        | _f32 → f32_  | __1854.27__ |
+| `numkong.dots_packed` | _f16 → f32_  | __1134.69__ |
+| `numkong.dots_packed` | _f32 → f64_  |  __194.15__ |
 
 ## Run It
 
