@@ -579,8 +579,6 @@ def get_thread_count() -> int:
     Get thread count for parallel benchmarks.
     Defaults to 1 (single-threaded). Set to 0 to use all logical CPUs.
     """
-    import os
-
     n = get_env_parsed("NUMWARS_THREADS", 1, int)
     if n == 0:
         return os.cpu_count() or 1
