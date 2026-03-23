@@ -38,14 +38,27 @@ trait RunNumKongAngulars: Sized {
     fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _a: &[Self], _b: &[Self], _bs: usize, _dim: usize) {}
 }
 
-impl<T: Angulars + Clone + 'static> RunNumKongAngulars for T {
+impl<T: Angulars + Clone + Send + Sync + 'static> RunNumKongAngulars for T
+where
+    T::Accumulator: Send + Sync,
+    <T as Angulars>::SpatialResult: Send + Sync,
+{
     fn run(group: &mut BenchmarkGroup<'_, WallTime>, data_a: &[T], data_b: &[T], bs: usize, dim: usize) {
+        let threads = get_thread_count();
         let tensor_a = Tensor::<T>::try_from_slice(data_a, &[bs, dim]).expect("Failed to create tensor A");
         let tensor_b = Tensor::<T>::try_from_slice(data_b, &[bs, dim]).expect("Failed to create tensor B");
         let packed_b = PackedMatrix::try_pack(&tensor_b).expect("Failed to pack B");
-        group.bench_function("numkong", |bench| {
-            bench.iter(|| black_box(tensor_a.angulars_packed(&packed_b)))
-        });
+        if threads > 1 {
+            let mut pool = fork_union::ThreadPool::try_spawn(threads).expect("Failed to spawn thread pool");
+            pool.for_threads(|_, _| { capabilities::configure_thread(); }).join();
+            group.bench_function("numkong", |bench| {
+                bench.iter(|| black_box(tensor_a.angulars_packed_parallel(&packed_b, &mut pool)))
+            });
+        } else {
+            group.bench_function("numkong", |bench| {
+                bench.iter(|| black_box(tensor_a.angulars_packed(&packed_b)))
+            });
+        }
     }
 }
 
@@ -159,14 +172,27 @@ trait RunNumKongEuclideans: Sized {
     fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _a: &[Self], _b: &[Self], _bs: usize, _dim: usize) {}
 }
 
-impl<T: Euclideans + Clone + 'static> RunNumKongEuclideans for T {
+impl<T: Euclideans + Clone + Send + Sync + 'static> RunNumKongEuclideans for T
+where
+    T::Accumulator: Send + Sync,
+    <T as Euclideans>::SpatialResult: Send + Sync,
+{
     fn run(group: &mut BenchmarkGroup<'_, WallTime>, data_a: &[T], data_b: &[T], bs: usize, dim: usize) {
+        let threads = get_thread_count();
         let tensor_a = Tensor::<T>::try_from_slice(data_a, &[bs, dim]).expect("Failed to create tensor A");
         let tensor_b = Tensor::<T>::try_from_slice(data_b, &[bs, dim]).expect("Failed to create tensor B");
         let packed_b = PackedMatrix::try_pack(&tensor_b).expect("Failed to pack B");
-        group.bench_function("numkong", |bench| {
-            bench.iter(|| black_box(tensor_a.euclideans_packed(&packed_b)))
-        });
+        if threads > 1 {
+            let mut pool = fork_union::ThreadPool::try_spawn(threads).expect("Failed to spawn thread pool");
+            pool.for_threads(|_, _| { capabilities::configure_thread(); }).join();
+            group.bench_function("numkong", |bench| {
+                bench.iter(|| black_box(tensor_a.euclideans_packed_parallel(&packed_b, &mut pool)))
+            });
+        } else {
+            group.bench_function("numkong", |bench| {
+                bench.iter(|| black_box(tensor_a.euclideans_packed(&packed_b)))
+            });
+        }
     }
 }
 

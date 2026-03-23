@@ -509,10 +509,11 @@ pub fn get_batch_size() -> usize {
 }
 
 /// Get thread count for parallel benchmarks.
-/// Defaults to the number of logical CPUs on the system.
+/// Defaults to 1 (single-threaded). Set to 0 to use all logical CPUs.
 #[allow(dead_code)]
 pub fn get_thread_count() -> usize {
-    get_env_parsed("NUMWARS_THREADS", num_cpus::get())
+    let n = get_env_parsed("NUMWARS_THREADS", 1);
+    if n == 0 { num_cpus::get() } else { n }
 }
 
 /// Check if a benchmark should run based on NUMWARS_FILTER regex.

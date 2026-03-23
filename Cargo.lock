@@ -684,6 +684,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
+name = "fork_union"
+version = "2.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1628ff3f250d7cdf1384c517419171944a73b5822a9cd0e15ad47485c42e8f57"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "futures"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1609,11 +1618,12 @@ dependencies = [
 
 [[package]]
 name = "numkong"
-version = "7.0.0"
+version = "7.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dde018efb2b66f9666e28219c79013dbeb64b53d94e6d0bf371eb4ad3d14fb1b"
+checksum = "506e52f831138fc6421b2b6593c2e9200261c462c87243af9fd3be866794ce13"
 dependencies = [
  "cc",
+ "fork_union",
 ]
 
 [[package]]
@@ -1623,6 +1633,7 @@ dependencies = [
  "argminmax",
  "criterion",
  "faer",
+ "fork_union",
  "geo",
  "half",
  "matrixmultiply",

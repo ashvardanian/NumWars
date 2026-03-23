@@ -11,13 +11,19 @@ import re
 import time
 from typing import Any, Callable, List, Optional, Tuple, TypeVar, Union
 
-# Force single-threaded execution for all numerical libraries.
+# Configure threading for all numerical libraries based on NUMWARS_THREADS.
+# NUMWARS_THREADS=1 (default): single-threaded. NUMWARS_THREADS=0: all cores.
 # Must be set before importing numpy or any BLAS-backed library.
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["NUMEXPR_NUM_THREADS"] = "1"
-os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
+_numwars_threads = int(os.environ.get("NUMWARS_THREADS", "1"))
+if _numwars_threads == 0:
+    _numwars_threads = os.cpu_count() or 1
+_threads_str = str(_numwars_threads)
+
+os.environ["OMP_NUM_THREADS"] = _threads_str
+os.environ["MKL_NUM_THREADS"] = _threads_str
+os.environ["NUMEXPR_NUM_THREADS"] = _threads_str
+os.environ["VECLIB_MAXIMUM_THREADS"] = _threads_str
+os.environ["OPENBLAS_NUM_THREADS"] = _threads_str
 
 import numpy as np
 
@@ -571,12 +577,14 @@ def get_batch_size() -> int:
 def get_thread_count() -> int:
     """
     Get thread count for parallel benchmarks.
-    Defaults to the number of logical CPUs on the system.
+    Defaults to 1 (single-threaded). Set to 0 to use all logical CPUs.
     """
     import os
 
-    default_threads = os.cpu_count() or 1
-    return get_env_parsed("NUMWARS_THREADS", default_threads, int)
+    n = get_env_parsed("NUMWARS_THREADS", 1, int)
+    if n == 0:
+        return os.cpu_count() or 1
+    return n
 
 
 # endregion

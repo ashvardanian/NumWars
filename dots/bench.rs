@@ -2,11 +2,11 @@
 //!
 //! Tests F32, F64, BF16, F16, I8, U8, E4M3, E5M2, E2M3, E3M2 matrix multiplications
 //! across multiple libraries:
-//! - NumKong (single-threaded)
+//! - NumKong (single or multi-threaded via NUMWARS_THREADS)
 //! - matrixmultiply (sgemm/dgemm)
-//! - ndarray (single-threaded)
-//! - nalgebra (single-threaded)
-//! - faer (single-threaded)
+//! - ndarray (BLAS-backed, respects NUMWARS_THREADS)
+//! - nalgebra (BLAS-backed, respects NUMWARS_THREADS)
+//! - faer (single or multi-threaded via NUMWARS_THREADS)
 //!
 //! Run with:
 //! ```bash
@@ -42,6 +42,16 @@ use numkong::{bf16, capabilities, e2m3, e3m2, e4m3, e5m2, f16, Dots, PackedMatri
 use std::hint::black_box;
 use utils::*;
 
+/// Resolve the parallelism setting for faer based on NUMWARS_THREADS.
+fn faer_parallelism() -> faer::Par {
+    let threads = get_thread_count();
+    if threads <= 1 {
+        faer::Par::Seq
+    } else {
+        faer::Par::rayon(threads)
+    }
+}
+
 // region: matrixmultiply wrapper trait
 
 /// The `matrixmultiply` crate doesn't use traits, so we add a thin wrapper.
@@ -68,21 +78,33 @@ impl WrapMatrixMultiply for f64 {
 
 // region: Per-library Run traits
 
-trait RunNumKong: Dots + Clone + Sized
+trait RunNumKong: Dots + Clone + Send + Sync + Sized
 where
-    Self::Accumulator: Clone + Default,
+    Self::Accumulator: Clone + Default + Send + Sync,
 {
     fn run(group: &mut BenchmarkGroup<'_, WallTime>, m: usize, n: usize, k: usize, v: Self) {
+        let threads = get_thread_count();
         let a = Tensor::<Self>::try_full(&[m, k], v.clone()).expect("Failed to allocate A");
         let b = Tensor::<Self>::try_full(&[n, k], v).expect("Failed to allocate B");
         let packed_b = PackedMatrix::try_pack(&b).expect("Failed to pack B");
         let mut c_out =
             Tensor::<Self::Accumulator>::try_zeros(&[m, n]).expect("Failed to allocate C");
-        group.bench_function("numkong", |bench| {
-            bench.iter(|| {
-                a.try_dots_packed_into(&packed_b, &mut c_out).expect("matmul failed");
-            })
-        });
+        if threads > 1 {
+            let mut pool = fork_union::ThreadPool::try_spawn(threads).expect("Failed to spawn thread pool");
+            pool.for_threads(|_, _| { capabilities::configure_thread(); }).join();
+            group.bench_function("numkong", |bench| {
+                bench.iter(|| {
+                    a.try_dots_packed_parallel_into(&packed_b, &mut c_out, &mut pool)
+                        .expect("parallel matmul failed");
+                })
+            });
+        } else {
+            group.bench_function("numkong", |bench| {
+                bench.iter(|| {
+                    a.try_dots_packed_into(&packed_b, &mut c_out).expect("matmul failed");
+                })
+            });
+        }
     }
 }
 impl RunNumKong for f32 {}
@@ -206,6 +228,7 @@ trait RunFaer: Sized {
 }
 impl RunFaer for f32 {
     fn run(group: &mut BenchmarkGroup<'_, WallTime>, m: usize, n: usize, k: usize, v: f32) {
+        let par = faer_parallelism();
         let a = faer::Mat::<f32>::from_fn(m, k, |_, _| v);
         let b = faer::Mat::<f32>::from_fn(n, k, |_, _| v);
         let mut c_out = faer::Mat::<f32>::zeros(m, n);
@@ -217,7 +240,7 @@ impl RunFaer for f32 {
                     a.as_ref(),
                     b.as_ref().transpose(),
                     faer::traits::math_utils::one::<f32>(),
-                    faer::Par::Seq,
+                    par,
                 );
                 black_box(&c_out);
             })
@@ -226,6 +249,7 @@ impl RunFaer for f32 {
 }
 impl RunFaer for f64 {
     fn run(group: &mut BenchmarkGroup<'_, WallTime>, m: usize, n: usize, k: usize, v: f64) {
+        let par = faer_parallelism();
         let a = faer::Mat::<f64>::from_fn(m, k, |_, _| v);
         let b = faer::Mat::<f64>::from_fn(n, k, |_, _| v);
         let mut c_out = faer::Mat::<f64>::zeros(m, n);
@@ -237,7 +261,7 @@ impl RunFaer for f64 {
                     a.as_ref(),
                     b.as_ref().transpose(),
                     faer::traits::math_utils::one::<f64>(),
-                    faer::Par::Seq,
+                    par,
                 );
                 black_box(&c_out);
             })
@@ -259,8 +283,8 @@ impl RunFaer for e3m2 {}
 
 fn bench_dtype<T>(c: &mut Criterion, dtype: &str, init: T)
 where
-    T: Dots + Clone + RunNumKong + RunMatrixMultiply + RunNdarray + RunNalgebra + RunFaer,
-    T::Accumulator: Clone + Default,
+    T: Dots + Clone + Send + Sync + RunNumKong + RunMatrixMultiply + RunNdarray + RunNalgebra + RunFaer,
+    T::Accumulator: Clone + Default + Send + Sync,
 {
     let m = get_matrix_dims_height();
     let n = get_matrix_dims_width();

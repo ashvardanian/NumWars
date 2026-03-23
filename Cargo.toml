@@ -15,7 +15,8 @@ criterion = {version = "0.8", default-features = false}
 half = {version = "2.4", optional = true}
 num-traits = {version = "0.2", optional = true}
 num_cpus = "1.16"
-numkong = {version = "7.0.0", default-features = false}
+fork_union = {version = "2.3.1", optional = true}
+numkong = {version = "7.1.1", default-features = false}
 rand = {version = "0.10", optional = true}
 regex = "1.11"
 
@@ -31,13 +32,13 @@ wide = {version = "1.1", optional = true}
 
 [features]
 all = ["bench_similarity", "bench_each", "bench_dots", "bench_geospatial", "bench_similarities", "bench_maxsim", "bench_reduce", "bench_mesh"]
-bench_dots = ["rand", "ndarray", "nalgebra", "faer", "half", "matrixmultiply", "num-traits"]
+bench_dots = ["rand", "ndarray", "nalgebra", "faer", "half", "matrixmultiply", "num-traits", "numkong/parallel", "fork_union"]
 bench_each = ["rand", "num-traits", "half", "ndarray", "nalgebra"]
 bench_geospatial = ["rand", "num-traits", "geo"]
 bench_maxsim = ["rand", "num-traits", "half", "ndarray", "nalgebra"]
 bench_mesh = ["rand", "num-traits", "half", "nalgebra"]
 bench_reduce = ["rand", "num-traits", "ndarray", "polars"]
-bench_similarities = ["rand", "half", "num-traits", "ndarray", "nalgebra"]
+bench_similarities = ["rand", "half", "num-traits", "ndarray", "nalgebra", "numkong/parallel", "fork_union"]
 bench_similarity = ["rand", "num-traits", "half", "ndarray", "nalgebra"]
 default = []
 
