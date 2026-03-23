@@ -21,6 +21,9 @@
 //! Benchmark naming: similarities/{metric}/{dtype}
 //! Examples: similarities/angulars/f32, similarities/euclideans/f64
 
+extern crate blas_src;
+extern crate openblas_src;
+
 #[path = "../utils.rs"]
 mod utils;
 
@@ -50,7 +53,10 @@ where
         let packed_b = PackedMatrix::try_pack(&tensor_b).expect("Failed to pack B");
         if threads > 1 {
             let mut pool = fork_union::ThreadPool::try_spawn(threads).expect("Failed to spawn thread pool");
-            pool.for_threads(|_, _| { capabilities::configure_thread(); }).join();
+            pool.for_threads(|_, _| {
+                capabilities::configure_thread();
+            })
+            .join();
             group.bench_function("numkong", |bench| {
                 bench.iter(|| black_box(tensor_a.angulars_packed_parallel(&packed_b, &mut pool)))
             });
@@ -184,7 +190,10 @@ where
         let packed_b = PackedMatrix::try_pack(&tensor_b).expect("Failed to pack B");
         if threads > 1 {
             let mut pool = fork_union::ThreadPool::try_spawn(threads).expect("Failed to spawn thread pool");
-            pool.for_threads(|_, _| { capabilities::configure_thread(); }).join();
+            pool.for_threads(|_, _| {
+                capabilities::configure_thread();
+            })
+            .join();
             group.bench_function("numkong", |bench| {
                 bench.iter(|| black_box(tensor_a.euclideans_packed_parallel(&packed_b, &mut pool)))
             });
@@ -360,9 +369,24 @@ where
 
 // region: Benchmarks
 
+extern "C" {
+    fn openblas_set_num_threads(num_threads: std::ffi::c_int);
+}
+
+/// Propagate NUMWARS_THREADS to competitor backends at runtime.
+///
+/// OpenBLAS ignores env vars set after library init, so we call the C API directly.
+/// matrixmultiply reads MATMUL_NUM_THREADS lazily on first use, so env var works.
+fn propagate_thread_count() {
+    let threads = get_thread_count();
+    unsafe { openblas_set_num_threads(threads as std::ffi::c_int) };
+    std::env::set_var("MATMUL_NUM_THREADS", threads.to_string());
+}
+
 /// Benchmark N×M angular distance matrix.
 pub fn bench_angulars(c: &mut Criterion) {
     capabilities::configure_thread();
+    propagate_thread_count();
     let dimension = get_vector_dims();
     let batch_size = get_batch_size();
     bench_angulars_dtype(c, "f32", batch_size, dimension, 1.0f32);

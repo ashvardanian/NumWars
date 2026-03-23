@@ -12,33 +12,61 @@ version = "0.1.0"
 
 [dependencies]
 criterion = {version = "0.8", default-features = false}
+fork_union = {version = "2.3.1", optional = true}
 half = {version = "2.4", optional = true}
 num-traits = {version = "0.2", optional = true}
 num_cpus = "1.16"
-fork_union = {version = "2.3.1", optional = true}
 numkong = {version = "7.1.1", default-features = false}
 rand = {version = "0.10", optional = true}
 regex = "1.11"
 
 # Competitors (all optional)
 argminmax = {version = "0.6", optional = true, default-features = false, features = ["float"]}
+blas-src = {version = "0.14", optional = true, default-features = false, features = ["openblas"]}
 faer = {version = "0.24", optional = true}
 geo = {version = "0.32", optional = true}
-matrixmultiply = {version = "0.3", optional = true}
+matrixmultiply = {version = "0.3", optional = true, features = ["threading"]}
 nalgebra = {version = "0.34", optional = true}
 ndarray = {version = "0.17", optional = true}
+openblas-src = {version = "0.10", optional = true, features = ["cblas", "system"]}
 polars = {version = "0.53", optional = true, default-features = false, features = ["lazy"]}
 wide = {version = "1.1", optional = true}
 
 [features]
 all = ["bench_similarity", "bench_each", "bench_dots", "bench_geospatial", "bench_similarities", "bench_maxsim", "bench_reduce", "bench_mesh"]
-bench_dots = ["rand", "ndarray", "nalgebra", "faer", "half", "matrixmultiply", "num-traits", "numkong/parallel", "fork_union"]
+bench_dots = [
+  "rand",
+  "ndarray",
+  "ndarray/blas",
+  "ndarray/matrixmultiply-threading",
+  "nalgebra",
+  "faer",
+  "half",
+  "matrixmultiply",
+  "num-traits",
+  "numkong/parallel",
+  "fork_union",
+  "blas-src",
+  "openblas-src",
+]
 bench_each = ["rand", "num-traits", "half", "ndarray", "nalgebra"]
 bench_geospatial = ["rand", "num-traits", "geo"]
 bench_maxsim = ["rand", "num-traits", "half", "ndarray", "nalgebra"]
 bench_mesh = ["rand", "num-traits", "half", "nalgebra"]
 bench_reduce = ["rand", "num-traits", "ndarray", "polars"]
-bench_similarities = ["rand", "half", "num-traits", "ndarray", "nalgebra", "numkong/parallel", "fork_union"]
+bench_similarities = [
+  "rand",
+  "half",
+  "num-traits",
+  "ndarray",
+  "ndarray/blas",
+  "ndarray/matrixmultiply-threading",
+  "nalgebra",
+  "numkong/parallel",
+  "fork_union",
+  "blas-src",
+  "openblas-src",
+]
 bench_similarity = ["rand", "num-traits", "half", "ndarray", "nalgebra"]
 default = []
 

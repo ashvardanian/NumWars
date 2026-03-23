@@ -3,9 +3,9 @@
 //! Tests F32, F64, BF16, F16, I8, U8, E4M3, E5M2, E2M3, E3M2 matrix multiplications
 //! across multiple libraries:
 //! - NumKong (single or multi-threaded via NUMWARS_THREADS)
-//! - matrixmultiply (sgemm/dgemm)
-//! - ndarray (BLAS-backed, respects NUMWARS_THREADS)
-//! - nalgebra (BLAS-backed, respects NUMWARS_THREADS)
+//! - matrixmultiply (sgemm/dgemm, threaded via MATMUL_NUM_THREADS)
+//! - ndarray (OpenBLAS-backed, respects NUMWARS_THREADS via OPENBLAS_NUM_THREADS)
+//! - nalgebra (uses matrixmultiply, threaded via MATMUL_NUM_THREADS)
 //! - faer (single or multi-threaded via NUMWARS_THREADS)
 //!
 //! Run with:
@@ -32,6 +32,9 @@
 //!
 //! Benchmark naming: dots/{dtype}/{height}x{width}x{depth}
 //! Examples: dots/f32/2048x2048x2048, dots/i8/2048x2048x2048
+
+extern crate blas_src;
+extern crate openblas_src;
 
 #[path = "../utils.rs"]
 mod utils;
@@ -87,11 +90,13 @@ where
         let a = Tensor::<Self>::try_full(&[m, k], v.clone()).expect("Failed to allocate A");
         let b = Tensor::<Self>::try_full(&[n, k], v).expect("Failed to allocate B");
         let packed_b = PackedMatrix::try_pack(&b).expect("Failed to pack B");
-        let mut c_out =
-            Tensor::<Self::Accumulator>::try_zeros(&[m, n]).expect("Failed to allocate C");
+        let mut c_out = Tensor::<Self::Accumulator>::try_zeros(&[m, n]).expect("Failed to allocate C");
         if threads > 1 {
             let mut pool = fork_union::ThreadPool::try_spawn(threads).expect("Failed to spawn thread pool");
-            pool.for_threads(|_, _| { capabilities::configure_thread(); }).join();
+            pool.for_threads(|_, _| {
+                capabilities::configure_thread();
+            })
+            .join();
             group.bench_function("numkong", |bench| {
                 bench.iter(|| {
                     a.try_dots_packed_parallel_into(&packed_b, &mut c_out, &mut pool)
@@ -305,8 +310,23 @@ where
     group.finish();
 }
 
+extern "C" {
+    fn openblas_set_num_threads(num_threads: std::ffi::c_int);
+}
+
+/// Propagate NUMWARS_THREADS to competitor backends at runtime.
+///
+/// OpenBLAS ignores env vars set after library init, so we call the C API directly.
+/// matrixmultiply reads MATMUL_NUM_THREADS lazily on first use, so env var works.
+fn propagate_thread_count() {
+    let threads = get_thread_count();
+    unsafe { openblas_set_num_threads(threads as std::ffi::c_int) };
+    std::env::set_var("MATMUL_NUM_THREADS", threads.to_string());
+}
+
 fn bench_dots(c: &mut Criterion) {
     capabilities::configure_thread();
+    propagate_thread_count();
     bench_dtype(c, "f32", 1.0f32);
     bench_dtype(c, "f64", 1.0f64);
     bench_dtype(c, "i8", 1i8);
