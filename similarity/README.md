@@ -79,34 +79,34 @@ Pairwise vector-vector distance and dot-product benchmarks comparing NumKong aga
 
 ## Python
 
-| Library                | Precision    |     GSO/s |
-| :--------------------- | :----------- | --------: |
-| ___Dot___              |              |           |
-| `numkong.dot`          | _u8 → f32_   |  __9.37__ |
-| `numkong.dot`          | _i8 → f32_   |  __9.81__ |
-| `numkong.dot`          | _bf16 → f32_ |  __1.06__ |
-| `numkong.dot`          | _f32 → f32_  |  __2.02__ |
-| `numkong.dot`          | _f64 → f32_  |  __2.48__ |
-| `numpy.dot`            | _f32 → f32_  |      3.81 |
-| `numpy.dot`            | _f64 → f64_  |      3.68 |
-| ___Angular___          |              |           |
-| `numkong.angular`      | _u8 → f32_   | __10.07__ |
-| `numkong.angular`      | _i8 → f32_   | __10.04__ |
-| `numkong.angular`      | _bf16 → f32_ |  __1.03__ |
-| `numkong.angular`      | _f32 → f32_  |  __1.98__ |
-| `numkong.angular`      | _f64 → f32_  |  __2.01__ |
-| ___Euclidean___        |              |           |
-| `numkong.euclidean`    | _u8 → f32_   | __10.24__ |
-| `numkong.euclidean`    | _i8 → f32_   | __10.32__ |
-| `numkong.euclidean`    | _bf16 → f32_ |  __0.92__ |
-| `numkong.euclidean`    | _f32 → f32_  |  __2.15__ |
-| `numkong.euclidean`    | _f64 → f32_  |  __2.14__ |
-| ___SqEuclidean___      |              |           |
-| `numkong.sqeuclidean`  | _u8 → f32_   |  __9.34__ |
-| `numkong.sqeuclidean`  | _i8 → f32_   |  __8.60__ |
-| `numkong.sqeuclidean`  | _bf16 → f32_ |  __0.93__ |
-| `numkong.sqeuclidean`  | _f32 → f32_  |  __2.02__ |
-| `numkong.sqeuclidean`  | _f64 → f32_  |  __2.14__ |
+| Library               | Precision    |     GSO/s |
+| :-------------------- | :----------- | --------: |
+| ___Dot___             |              |           |
+| `numkong.dot`         | _u8 → f32_   |  __9.37__ |
+| `numkong.dot`         | _i8 → f32_   |  __9.81__ |
+| `numkong.dot`         | _bf16 → f32_ |  __1.06__ |
+| `numkong.dot`         | _f32 → f32_  |  __2.02__ |
+| `numkong.dot`         | _f64 → f32_  |  __2.48__ |
+| `numpy.dot`           | _f32 → f32_  |      3.81 |
+| `numpy.dot`           | _f64 → f64_  |      3.68 |
+| ___Angular___         |              |           |
+| `numkong.angular`     | _u8 → f32_   | __10.07__ |
+| `numkong.angular`     | _i8 → f32_   | __10.04__ |
+| `numkong.angular`     | _bf16 → f32_ |  __1.03__ |
+| `numkong.angular`     | _f32 → f32_  |  __1.98__ |
+| `numkong.angular`     | _f64 → f32_  |  __2.01__ |
+| ___Euclidean___       |              |           |
+| `numkong.euclidean`   | _u8 → f32_   | __10.24__ |
+| `numkong.euclidean`   | _i8 → f32_   | __10.32__ |
+| `numkong.euclidean`   | _bf16 → f32_ |  __0.92__ |
+| `numkong.euclidean`   | _f32 → f32_  |  __2.15__ |
+| `numkong.euclidean`   | _f64 → f32_  |  __2.14__ |
+| ___SqEuclidean___     |              |           |
+| `numkong.sqeuclidean` | _u8 → f32_   |  __9.34__ |
+| `numkong.sqeuclidean` | _i8 → f32_   |  __8.60__ |
+| `numkong.sqeuclidean` | _bf16 → f32_ |  __0.93__ |
+| `numkong.sqeuclidean` | _f32 → f32_  |  __2.02__ |
+| `numkong.sqeuclidean` | _f64 → f32_  |  __2.14__ |
 
 ## Run It
 

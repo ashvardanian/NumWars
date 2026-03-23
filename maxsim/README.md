@@ -4,12 +4,12 @@ ColBERT-style late-interaction scoring benchmarks comparing NumKong against ndar
 
 ## Rust
 
-| Library                             | Precision    |       GSO/s |
-| :---------------------------------- | :----------- | ----------: |
-| `numkong::MaxSimPackedMatrix::score`| _f32 → f64_  | __1483.41__ |
-| `numkong::MaxSimPackedMatrix::score`| _bf16 → f32_ |  __983.57__ |
-| `numkong::MaxSimPackedMatrix::score`| _f16 → f32_  |  __980.33__ |
-| ndarray Q @ Dᵀ max-reduce          | _f32 → f32_  |      58.37 |
+| Library                              | Precision    |       GSO/s |
+| :----------------------------------- | :----------- | ----------: |
+| `numkong::MaxSimPackedMatrix::score` | _f32 → f64_  | __1483.41__ |
+| `numkong::MaxSimPackedMatrix::score` | _bf16 → f32_ |  __983.57__ |
+| `numkong::MaxSimPackedMatrix::score` | _f16 → f32_  |  __980.33__ |
+| ndarray Q @ Dᵀ max-reduce            | _f32 → f32_  |       58.37 |
 
 ## Python
 

@@ -27,9 +27,9 @@ All-pairs distance matrix benchmarks comparing NumKong packed kernels against nd
 | `nalgebra euclidean`         | _f64 → f64_  |      27.11 |
 | `numkong::euclideans_packed` | _f64 → f64_  |  __22.85__ |
 | ___Hamming___                |              |            |
-| `numkong::hammings_packed`   | _u1x8_       |  __9821__ |
+| `numkong::hammings_packed`   | _u1x8_       |   __9821__ |
 | ___Jaccard___                |              |            |
-| `numkong::jaccards_packed`   | _u1x8_       |  __3173__ |
+| `numkong::jaccards_packed`   | _u1x8_       |   __3173__ |
 
 ## Python
 

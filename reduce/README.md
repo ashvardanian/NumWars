@@ -9,23 +9,23 @@ Horizontal sum and row-norm benchmarks comparing NumKong against Polars, ndarray
 | ___Sum___                   |              |            |
 | `polars::ChunkedArray::sum` | _f64 → f64_  | __113.57__ |
 | `polars::ChunkedArray::sum` | _f32 → f32_  | __110.70__ |
-| `ndarray::sum`              | _f64 → f64_  |     99.49 |
-| `ndarray::sum`              | _f32 → f32_  |     49.83 |
-| `numkong::reduce_moments`   | _bf16 → f64_ | __33.17__ |
-| `numkong::reduce_moments`   | _u8 → u64_   | __24.24__ |
-| serial code                 | _u8 → u64_   |     22.96 |
-| `numkong::reduce_moments`   | _f64 → f64_  |     18.26 |
-| `numkong::reduce_moments`   | _f32 → f64_  | __10.31__ |
-| serial code                 | _f32 → f32_  |      8.50 |
+| `ndarray::sum`              | _f64 → f64_  |      99.49 |
+| `ndarray::sum`              | _f32 → f32_  |      49.83 |
+| `numkong::reduce_moments`   | _bf16 → f64_ |  __33.17__ |
+| `numkong::reduce_moments`   | _u8 → u64_   |  __24.24__ |
+| serial code                 | _u8 → u64_   |      22.96 |
+| `numkong::reduce_moments`   | _f64 → f64_  |      18.26 |
+| `numkong::reduce_moments`   | _f32 → f64_  |  __10.31__ |
+| serial code                 | _f32 → f32_  |       8.50 |
 | ___Row Norms___             |              |            |
 | `ndarray::dot`              | _f64 → f64_  |  __89.72__ |
 | `ndarray::dot`              | _f32 → f32_  |  __53.24__ |
 | `numkong::Dot`              | _bf16 → f32_ |  __30.64__ |
-| `numkong::Dot`              | _f64 → f64_  |     23.44 |
-| serial code                 | _f64 → f64_  |     17.95 |
+| `numkong::Dot`              | _f64 → f64_  |      23.44 |
+| serial code                 | _f64 → f64_  |      17.95 |
 | `numkong::Dot`              | _f16 → f32_  |  __12.93__ |
-| `numkong::Dot`              | _f32 → f32_  |     10.60 |
-| serial code                 | _f32 → f32_  |      9.20 |
+| `numkong::Dot`              | _f32 → f32_  |      10.60 |
+| serial code                 | _f32 → f32_  |       9.20 |
 
 ## Python
 

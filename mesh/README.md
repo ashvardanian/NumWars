@@ -4,26 +4,26 @@
 
 ## Rust
 
-| Library                            | Precision     |        MP/s |
-| :--------------------------------- | :------------ | ----------: |
-| ___RMSD___                         |               |             |
-| `numkong::MeshAlignment::rmsd`     | _f16 → f16_   | __2864.47__ |
-| `numkong::MeshAlignment::rmsd`     | _bf16 → bf16_ | __2861.70__ |
-| `numkong::MeshAlignment::rmsd`     | _f64 → f64_   | __1859.32__ |
-| `numkong::MeshAlignment::rmsd`     | _f32 → f32_   | __1626.67__ |
-| nalgebra-based RMSD                | _f32 → f32_   |     634.04 |
-| ___Kabsch___                       |               |             |
-| `numkong::MeshAlignment::kabsch`   | _f16 → f16_   |  __696.00__ |
-| `numkong::MeshAlignment::kabsch`   | _bf16 → bf16_ |  __691.01__ |
-| `numkong::MeshAlignment::kabsch`   | _f32 → f32_   |  __396.52__ |
-| `numkong::MeshAlignment::kabsch`   | _f64 → f64_   |  __331.70__ |
-| nalgebra-based Kabsch              | _f32 → f64_   |     283.16 |
-| ___Umeyama___                      |               |             |
-| `numkong::MeshAlignment::umeyama`  | _bf16 → bf16_ |  __673.50__ |
-| `numkong::MeshAlignment::umeyama`  | _f16 → f16_   |  __614.06__ |
-| `numkong::MeshAlignment::umeyama`  | _f32 → f32_   |  __376.48__ |
-| `numkong::MeshAlignment::umeyama`  | _f64 → f64_   |  __325.16__ |
-| nalgebra-based Umeyama             | _f32 → f64_   |     255.14 |
+| Library                           | Precision     |        MP/s |
+| :-------------------------------- | :------------ | ----------: |
+| ___RMSD___                        |               |             |
+| `numkong::MeshAlignment::rmsd`    | _f16 → f16_   | __2864.47__ |
+| `numkong::MeshAlignment::rmsd`    | _bf16 → bf16_ | __2861.70__ |
+| `numkong::MeshAlignment::rmsd`    | _f64 → f64_   | __1859.32__ |
+| `numkong::MeshAlignment::rmsd`    | _f32 → f32_   | __1626.67__ |
+| nalgebra-based RMSD               | _f32 → f32_   |      634.04 |
+| ___Kabsch___                      |               |             |
+| `numkong::MeshAlignment::kabsch`  | _f16 → f16_   |  __696.00__ |
+| `numkong::MeshAlignment::kabsch`  | _bf16 → bf16_ |  __691.01__ |
+| `numkong::MeshAlignment::kabsch`  | _f32 → f32_   |  __396.52__ |
+| `numkong::MeshAlignment::kabsch`  | _f64 → f64_   |  __331.70__ |
+| nalgebra-based Kabsch             | _f32 → f64_   |      283.16 |
+| ___Umeyama___                     |               |             |
+| `numkong::MeshAlignment::umeyama` | _bf16 → bf16_ |  __673.50__ |
+| `numkong::MeshAlignment::umeyama` | _f16 → f16_   |  __614.06__ |
+| `numkong::MeshAlignment::umeyama` | _f32 → f32_   |  __376.48__ |
+| `numkong::MeshAlignment::umeyama` | _f64 → f64_   |  __325.16__ |
+| nalgebra-based Umeyama            | _f32 → f64_   |      255.14 |
 
 ## Python
 

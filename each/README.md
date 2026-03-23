@@ -7,31 +7,31 @@ Elementwise sum and scale bandwidth benchmarks comparing NumKong against scalar 
 | Library              | Precision     |       GB/s |
 | :------------------- | :------------ | ---------: |
 | ___Sum___            |               |            |
-| `numkong::EachSum`   | _f32 → f32_   | __97.55__ |
-| `nalgebra::add`      | _f32 → f32_   |     95.31 |
-| `ndarray::add`       | _f32 → f32_   |     94.84 |
-| serial code          | _f32 → f32_   |     94.06 |
-| serial code          | _f64 → f64_   | __85.48__ |
-| `ndarray::add`       | _f64 → f64_   |     84.91 |
-| `nalgebra::add`      | _f64 → f64_   |     84.55 |
-| `numkong::EachSum`   | _f64 → f64_   |     82.77 |
-| `numkong::EachSum`   | _f16 → f16_   | __96.56__ |
-| `numkong::EachSum`   | _bf16 → bf16_ | __17.73__ |
+| `numkong::EachSum`   | _f32 → f32_   |  __97.55__ |
+| `nalgebra::add`      | _f32 → f32_   |      95.31 |
+| `ndarray::add`       | _f32 → f32_   |      94.84 |
+| serial code          | _f32 → f32_   |      94.06 |
+| serial code          | _f64 → f64_   |  __85.48__ |
+| `ndarray::add`       | _f64 → f64_   |      84.91 |
+| `nalgebra::add`      | _f64 → f64_   |      84.55 |
+| `numkong::EachSum`   | _f64 → f64_   |      82.77 |
+| `numkong::EachSum`   | _f16 → f16_   |  __96.56__ |
+| `numkong::EachSum`   | _bf16 → bf16_ |  __17.73__ |
 | `numkong::EachSum`   | _i8 → i8_     | __111.47__ |
-| serial code          | _i8 → i8_     |    110.81 |
+| serial code          | _i8 → i8_     |     110.81 |
 | ___Scale___          |               |            |
-| serial code          | _f32 → f32_   | __82.22__ |
-| `ndarray::scale`     | _f32 → f32_   |     81.75 |
-| `numkong::EachScale` | _f32 → f32_   |     66.56 |
-| `nalgebra::scale`    | _f32 → f32_   |     39.52 |
-| serial code          | _f64 → f64_   | __72.46__ |
-| `ndarray::scale`     | _f64 → f64_   |     72.39 |
-| `numkong::EachScale` | _f64 → f64_   |     66.70 |
-| `nalgebra::scale`    | _f64 → f64_   |     38.58 |
-| `numkong::EachScale` | _f16 → f16_   | __66.23__ |
-| `numkong::EachScale` | _bf16 → bf16_ | __33.19__ |
-| serial code          | _i8 → i8_     | __89.21__ |
-| `numkong::EachScale` | _i8 → i8_     |     26.43 |
+| serial code          | _f32 → f32_   |  __82.22__ |
+| `ndarray::scale`     | _f32 → f32_   |      81.75 |
+| `numkong::EachScale` | _f32 → f32_   |      66.56 |
+| `nalgebra::scale`    | _f32 → f32_   |      39.52 |
+| serial code          | _f64 → f64_   |  __72.46__ |
+| `ndarray::scale`     | _f64 → f64_   |      72.39 |
+| `numkong::EachScale` | _f64 → f64_   |      66.70 |
+| `nalgebra::scale`    | _f64 → f64_   |      38.58 |
+| `numkong::EachScale` | _f16 → f16_   |  __66.23__ |
+| `numkong::EachScale` | _bf16 → bf16_ |  __33.19__ |
+| serial code          | _i8 → i8_     |  __89.21__ |
+| `numkong::EachScale` | _i8 → i8_     |      26.43 |
 
 ## Python
 
