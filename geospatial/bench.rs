@@ -70,7 +70,7 @@ fn baseline_vincenty<T: Float>(lat1: T, lon1: T, lat2: T, lon2: T) -> T {
     let mut sin_sigma = T::zero();
     let mut cos_sigma = T::zero();
     let mut sigma = T::zero();
-    let mut sin_alpha = T::zero();
+    let mut sin_alpha;
     let mut cos_sq_alpha = T::zero();
     let mut cos_2sigma_m = T::zero();
 
@@ -463,6 +463,7 @@ pub fn bench_vincenty(c: &mut Criterion) {
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused_imports)]
     use super::*;
 
     #[test]

@@ -150,44 +150,6 @@ impl<T> OptionExt<T> for Option<T> {
     }
 }
 
-/// Errors that can occur during benchmark operations.
-#[derive(Debug)]
-pub enum BenchmarkError {
-    /// Invalid configuration parameter.
-    InvalidConfig { param: String, reason: String },
-    /// Data generation failed.
-    DataGeneration { reason: String },
-    /// Unsupported data type for the operation.
-    UnsupportedType { dtype: String, operation: String },
-    /// Matrix dimension mismatch.
-    DimensionMismatch { expected: String, got: String },
-}
-
-impl fmt::Display for BenchmarkError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            BenchmarkError::InvalidConfig { param, reason } => {
-                write!(f, "Invalid configuration for '{}': {}", param, reason)
-            }
-            BenchmarkError::DataGeneration { reason } => {
-                write!(f, "Failed to generate data: {}", reason)
-            }
-            BenchmarkError::UnsupportedType { dtype, operation } => {
-                write!(
-                    f,
-                    "Data type '{}' is not supported for operation '{}'",
-                    dtype, operation
-                )
-            }
-            BenchmarkError::DimensionMismatch { expected, got } => {
-                write!(f, "Dimension mismatch: expected {}, got {}", expected, got)
-            }
-        }
-    }
-}
-
-impl std::error::Error for BenchmarkError {}
-
 // endregion
 
 // region: Baseline Conversion
@@ -585,6 +547,7 @@ pub fn configure_criterion() -> Criterion {
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused_imports)]
     use super::*;
 
     #[test]

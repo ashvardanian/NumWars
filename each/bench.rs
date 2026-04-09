@@ -360,6 +360,7 @@ pub fn bench_scale(c: &mut Criterion) {
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused_imports)]
     use super::*;
 
     #[test]

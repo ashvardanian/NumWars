@@ -1048,6 +1048,7 @@ pub fn bench_jensenshannon(c: &mut Criterion) {
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused_imports)]
     use super::*;
 
     #[test]
