@@ -192,7 +192,7 @@ fn generate_random_coords<T: SampleUniform + PartialOrd + Copy>(
 
 // endregion
 
-// region: Per-library Run traits — Haversine
+// region: Per-Library Run Traits — Haversine
 
 trait RunBaselineHaversine: Sized {
     fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _al: &[Self], _ao: &[Self], _bl: &[Self], _bo: &[Self]) {}
@@ -304,7 +304,7 @@ impl RunGeoHaversine for f64 {
 
 // endregion
 
-// region: Per-library Run traits — Vincenty
+// region: Per-Library Run Traits — Vincenty
 
 trait RunBaselineVincenty: Sized {
     fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _al: &[Self], _ao: &[Self], _bl: &[Self], _bo: &[Self]) {}
@@ -394,7 +394,7 @@ impl RunGeoVincenty for f64 {
 
 // endregion
 
-// region: Generic helpers
+// region: Generic Helpers
 
 fn bench_haversine_dtype<T>(c: &mut Criterion, rng: &mut impl Rng, dtype: &str, count: usize)
 where

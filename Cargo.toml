@@ -12,11 +12,11 @@ version = "0.1.0"
 
 [dependencies]
 criterion = {version = "0.8", default-features = false}
-fork_union = {version = "2.3.1", optional = true}
+forkunion = {version = "3.0", optional = true}
 half = {version = "2.4", optional = true}
 num-traits = {version = "0.2", optional = true}
 num_cpus = "1.16"
-numkong = {version = "7.1.1", default-features = false}
+numkong = {version = "7.7.1", default-features = false}
 rand = {version = "0.10", optional = true}
 regex = "1.11"
 
@@ -45,7 +45,7 @@ bench_dots = [
   "matrixmultiply",
   "num-traits",
   "numkong/parallel",
-  "fork_union",
+  "forkunion",
   "blas-src",
   "openblas-src",
 ]
@@ -63,7 +63,7 @@ bench_similarities = [
   "ndarray/matrixmultiply-threading",
   "nalgebra",
   "numkong/parallel",
-  "fork_union",
+  "forkunion",
   "blas-src",
   "openblas-src",
 ]

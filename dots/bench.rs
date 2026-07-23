@@ -33,15 +33,13 @@
 //! Benchmark naming: dots/{dtype}/{height}x{width}x{depth}
 //! Examples: dots/f32/2048x2048x2048, dots/i8/2048x2048x2048
 
-extern crate blas_src;
-extern crate openblas_src;
-
 #[path = "../utils.rs"]
 mod utils;
 
 use criterion::measurement::WallTime;
 use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion, Throughput};
-use numkong::{bf16, capabilities, e2m3, e3m2, e4m3, e5m2, f16, Dots, PackedMatrix, Tensor};
+use numkong::prelude::*;
+use numkong::{bf16, capabilities, e2m3, e3m2, e4m3, e5m2, f16, Dots};
 use std::hint::black_box;
 use utils::*;
 
@@ -55,7 +53,7 @@ fn faer_parallelism() -> faer::Par {
     }
 }
 
-// region: matrixmultiply wrapper trait
+// region: MatrixMultiply Wrapper Trait
 
 /// The `matrixmultiply` crate doesn't use traits, so we add a thin wrapper.
 /// https://docs.rs/matrixmultiply/latest/matrixmultiply/all.html
@@ -79,36 +77,34 @@ impl WrapMatrixMultiply for f64 {
 
 // endregion
 
-// region: Per-library Run traits
+// region: Per-Library Run Traits
 
 trait RunNumKong: Dots + Clone + Send + Sync + Sized
 where
     Self::Accumulator: Clone + Default + Send + Sync,
 {
     fn run(group: &mut BenchmarkGroup<'_, WallTime>, m: usize, n: usize, k: usize, v: Self) {
-        let threads = get_thread_count();
         let a = Tensor::<Self>::try_full(&[m, k], v.clone()).expect("Failed to allocate A");
         let b = Tensor::<Self>::try_full(&[n, k], v).expect("Failed to allocate B");
-        let packed_b = PackedMatrix::try_pack(&b).expect("Failed to pack B");
         let mut c_out = Tensor::<Self::Accumulator>::try_zeros(&[m, n]).expect("Failed to allocate C");
-        if threads > 1 {
-            let mut pool = fork_union::ThreadPool::try_spawn(threads).expect("Failed to spawn thread pool");
-            pool.for_threads(|_, _| {
-                capabilities::configure_thread();
-            })
-            .join();
-            group.bench_function("numkong", |bench| {
-                bench.iter(|| {
-                    a.try_dots_packed_parallel_into(&packed_b, &mut c_out, &mut pool)
-                        .expect("parallel matmul failed");
-                })
-            });
-        } else {
-            group.bench_function("numkong", |bench| {
-                bench.iter(|| {
-                    a.try_dots_packed_into(&packed_b, &mut c_out).expect("matmul failed");
-                })
-            });
+        match try_spawn_pool() {
+            Some(mut pool) => {
+                let packed_b = pack_dots_matrix(&b, Some(&mut pool));
+                group.bench_function("numkong", |bench| {
+                    bench.iter(|| {
+                        a.try_dots_packed_parallel_into(&packed_b, &mut c_out, &mut pool)
+                            .expect("parallel matmul failed");
+                    })
+                });
+            }
+            None => {
+                let packed_b = pack_dots_matrix(&b, None);
+                group.bench_function("numkong", |bench| {
+                    bench.iter(|| {
+                        a.try_dots_packed_into(&packed_b, &mut c_out).expect("matmul failed");
+                    })
+                });
+            }
         }
     }
 }
@@ -284,7 +280,7 @@ impl RunFaer for e3m2 {}
 
 // endregion
 
-// region: Generic helper and entry point
+// region: Generic Helpers
 
 fn bench_dtype<T>(c: &mut Criterion, dtype: &str, init: T)
 where
@@ -308,20 +304,6 @@ where
     <T as RunFaer>::run(&mut group, m, n, k, init);
 
     group.finish();
-}
-
-extern "C" {
-    fn openblas_set_num_threads(num_threads: std::ffi::c_int);
-}
-
-/// Propagate NUMWARS_THREADS to competitor backends at runtime.
-///
-/// OpenBLAS ignores env vars set after library init, so we call the C API directly.
-/// matrixmultiply reads MATMUL_NUM_THREADS lazily on first use, so env var works.
-fn propagate_thread_count() {
-    let threads = get_thread_count();
-    unsafe { openblas_set_num_threads(threads as std::ffi::c_int) };
-    std::env::set_var("MATMUL_NUM_THREADS", threads.to_string());
 }
 
 fn bench_dots(c: &mut Criterion) {

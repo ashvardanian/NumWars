@@ -29,7 +29,7 @@ use std::hint::black_box;
 use std::iter::Sum;
 use utils::*;
 
-// region: Operation model
+// region: Operation Model
 
 #[derive(Clone, Copy)]
 enum ReduceOp {
@@ -46,7 +46,7 @@ impl ReduceOp {
 
 // endregion
 
-// region: Baseline kernels
+// region: Baseline Kernels
 
 fn baseline_sum<T: Copy + Sum>(data: &[T]) -> T {
     data.iter().copied().sum()
@@ -61,7 +61,7 @@ fn baseline_row_norms_float<T: Float + Sum>(data: &[T], output: &mut [T], batch_
 
 // endregion
 
-// region: Backend run traits
+// region: Per-Library Run Traits
 
 trait RunBaseline: Sized {
     fn run(_op: ReduceOp, _group: &mut BenchmarkGroup<'_, WallTime>, _data: &[Self]) {}
@@ -180,7 +180,7 @@ impl RunPolars for bf16 {}
 
 // endregion
 
-// region: Generic helper
+// region: Generic Helpers
 
 fn bench_reduce_op_dtype<T>(c: &mut Criterion, op: ReduceOp, dtype: &str, size: usize, init: T)
 where
@@ -365,7 +365,7 @@ fn bench_row_norms_dtype<T: RunRowNorms>(c: &mut Criterion, dtype: &str, batch_s
 pub fn bench_row_norms(c: &mut Criterion) {
     capabilities::configure_thread();
     let ndim = get_vector_dims();
-    let batch_size = get_batch_size();
+    let batch_size = get_vector_dims();
     bench_row_norms_dtype(c, "f32", batch_size, ndim, 1.0f32);
     bench_row_norms_dtype(c, "f64", batch_size, ndim, 1.0f64);
     bench_row_norms_dtype(c, "bf16", batch_size, ndim, bf16::from_f32(1.0));

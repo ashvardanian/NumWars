@@ -28,11 +28,12 @@ mod utils;
 use criterion::measurement::WallTime;
 use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion, Throughput};
 use ndarray::Array2;
-use numkong::{bf16, capabilities, f16, MaxSim, MaxSimPackedMatrix, Tensor};
+use numkong::prelude::*;
+use numkong::{bf16, capabilities, f16, MaxSim, MaxSimPackedMatrix};
 use std::hint::black_box;
 use utils::*;
 
-// region: Per-library run traits
+// region: Per-Library Run Traits
 
 trait RunNumKong: Sized {
     fn run(
@@ -61,7 +62,7 @@ fn run_numkong<T: MaxSim + Clone>(
     let packed_documents =
         MaxSimPackedMatrix::<T>::try_pack(&document_tensor.view()).expect("Failed to pack documents");
     group.bench_function("numkong", |bench| {
-        bench.iter(|| black_box(packed_queries.score(&packed_documents)))
+        bench.iter(|| black_box(packed_queries.try_score(&packed_documents).expect("scoring failed")))
     });
 }
 
@@ -122,7 +123,7 @@ impl RunNdarray for bf16 {}
 
 // endregion
 
-// region: Generic helper
+// region: Generic Helpers
 
 fn bench_maxsim_dtype<T>(
     c: &mut Criterion,

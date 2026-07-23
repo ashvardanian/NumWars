@@ -4,7 +4,7 @@
 //! for computing N×M distance matrices.
 //!
 //! Competitors:
-//! - numkong (PackedMatrix SIMD)
+//! - numkong (DotsPackedMatrix SIMD)
 //! - ndarray (BLAS-backed matmul for f32/f64)
 //! - nalgebra (matmul-based for f32/f64)
 //!
@@ -21,8 +21,6 @@
 //! Benchmark naming: similarities/{metric}/{dtype}
 //! Examples: similarities/angulars/f32, similarities/euclideans/f64
 
-extern crate blas_src;
-extern crate openblas_src;
 
 #[path = "../utils.rs"]
 mod utils;
@@ -31,11 +29,12 @@ use criterion::measurement::WallTime;
 use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion, Throughput};
 use nalgebra::DMatrix;
 use ndarray::Array2;
-use numkong::{bf16, capabilities, u1x8, Angulars, Euclideans, PackedMatrix, Tensor};
+use numkong::prelude::*;
+use numkong::{bf16, capabilities, u1x8, Angulars, Euclideans};
 use std::hint::black_box;
 use utils::*;
 
-// region: Per-library Run traits
+// region: Per-Library Run Traits
 
 trait RunNumKongAngulars: Sized {
     fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _a: &[Self], _b: &[Self], _bs: usize, _dim: usize) {}
@@ -47,23 +46,21 @@ where
     <T as Angulars>::SpatialResult: Send + Sync,
 {
     fn run(group: &mut BenchmarkGroup<'_, WallTime>, data_a: &[T], data_b: &[T], bs: usize, dim: usize) {
-        let threads = get_thread_count();
         let tensor_a = Tensor::<T>::try_from_slice(data_a, &[bs, dim]).expect("Failed to create tensor A");
         let tensor_b = Tensor::<T>::try_from_slice(data_b, &[bs, dim]).expect("Failed to create tensor B");
-        let packed_b = PackedMatrix::try_pack(&tensor_b).expect("Failed to pack B");
-        if threads > 1 {
-            let mut pool = fork_union::ThreadPool::try_spawn(threads).expect("Failed to spawn thread pool");
-            pool.for_threads(|_, _| {
-                capabilities::configure_thread();
-            })
-            .join();
-            group.bench_function("numkong", |bench| {
-                bench.iter(|| black_box(tensor_a.angulars_packed_parallel(&packed_b, &mut pool)))
-            });
-        } else {
-            group.bench_function("numkong", |bench| {
-                bench.iter(|| black_box(tensor_a.angulars_packed(&packed_b)))
-            });
+        match try_spawn_pool() {
+            Some(mut pool) => {
+                let packed_b = pack_dots_matrix(&tensor_b, Some(&mut pool));
+                group.bench_function("numkong", |bench| {
+                    bench.iter(|| black_box(tensor_a.angulars_packed_parallel(&packed_b, &mut pool)))
+                });
+            }
+            None => {
+                let packed_b = pack_dots_matrix(&tensor_b, None);
+                group.bench_function("numkong", |bench| {
+                    bench.iter(|| black_box(tensor_a.angulars_packed(&packed_b)))
+                });
+            }
         }
     }
 }
@@ -184,23 +181,21 @@ where
     <T as Euclideans>::SpatialResult: Send + Sync,
 {
     fn run(group: &mut BenchmarkGroup<'_, WallTime>, data_a: &[T], data_b: &[T], bs: usize, dim: usize) {
-        let threads = get_thread_count();
         let tensor_a = Tensor::<T>::try_from_slice(data_a, &[bs, dim]).expect("Failed to create tensor A");
         let tensor_b = Tensor::<T>::try_from_slice(data_b, &[bs, dim]).expect("Failed to create tensor B");
-        let packed_b = PackedMatrix::try_pack(&tensor_b).expect("Failed to pack B");
-        if threads > 1 {
-            let mut pool = fork_union::ThreadPool::try_spawn(threads).expect("Failed to spawn thread pool");
-            pool.for_threads(|_, _| {
-                capabilities::configure_thread();
-            })
-            .join();
-            group.bench_function("numkong", |bench| {
-                bench.iter(|| black_box(tensor_a.euclideans_packed_parallel(&packed_b, &mut pool)))
-            });
-        } else {
-            group.bench_function("numkong", |bench| {
-                bench.iter(|| black_box(tensor_a.euclideans_packed(&packed_b)))
-            });
+        match try_spawn_pool() {
+            Some(mut pool) => {
+                let packed_b = pack_dots_matrix(&tensor_b, Some(&mut pool));
+                group.bench_function("numkong", |bench| {
+                    bench.iter(|| black_box(tensor_a.euclideans_packed_parallel(&packed_b, &mut pool)))
+                });
+            }
+            None => {
+                let packed_b = pack_dots_matrix(&tensor_b, None);
+                group.bench_function("numkong", |bench| {
+                    bench.iter(|| black_box(tensor_a.euclideans_packed(&packed_b)))
+                });
+            }
         }
     }
 }
@@ -317,7 +312,7 @@ impl RunNalgebraEuclideans for bf16 {}
 
 // endregion
 
-// region: Generic helpers
+// region: Generic Helpers
 
 fn bench_angulars_dtype<T>(c: &mut Criterion, dtype: &str, batch_size: usize, dimension: usize, init: T)
 where
@@ -369,26 +364,12 @@ where
 
 // region: Benchmarks
 
-extern "C" {
-    fn openblas_set_num_threads(num_threads: std::ffi::c_int);
-}
-
-/// Propagate NUMWARS_THREADS to competitor backends at runtime.
-///
-/// OpenBLAS ignores env vars set after library init, so we call the C API directly.
-/// matrixmultiply reads MATMUL_NUM_THREADS lazily on first use, so env var works.
-fn propagate_thread_count() {
-    let threads = get_thread_count();
-    unsafe { openblas_set_num_threads(threads as std::ffi::c_int) };
-    std::env::set_var("MATMUL_NUM_THREADS", threads.to_string());
-}
-
 /// Benchmark N×M angular distance matrix.
 pub fn bench_angulars(c: &mut Criterion) {
     capabilities::configure_thread();
     propagate_thread_count();
     let dimension = get_vector_dims();
-    let batch_size = get_batch_size();
+    let batch_size = get_vector_dims();
     bench_angulars_dtype(c, "f32", batch_size, dimension, 1.0f32);
     bench_angulars_dtype(c, "f64", batch_size, dimension, 1.0f64);
     bench_angulars_dtype(c, "i8", batch_size, dimension, 1i8);
@@ -399,8 +380,9 @@ pub fn bench_angulars(c: &mut Criterion) {
 /// Benchmark N×M Euclidean distance matrix.
 pub fn bench_euclideans(c: &mut Criterion) {
     capabilities::configure_thread();
+    propagate_thread_count();
     let dimension = get_vector_dims();
-    let batch_size = get_batch_size();
+    let batch_size = get_vector_dims();
     bench_euclideans_dtype(c, "f32", batch_size, dimension, 1.0f32);
     bench_euclideans_dtype(c, "f64", batch_size, dimension, 1.0f64);
     bench_euclideans_dtype(c, "i8", batch_size, dimension, 1i8);
@@ -413,7 +395,7 @@ pub fn bench_hammings(c: &mut Criterion) {
     capabilities::configure_thread();
     let dimension = get_vector_dims();
     let byte_count = dimension.div_ceil(8);
-    let batch_size = get_batch_size();
+    let batch_size = get_vector_dims();
 
     if should_run_benchmark("similarities/hammings/u1x8") {
         let mut group = c.benchmark_group("similarities/hammings/u1x8");
@@ -426,11 +408,21 @@ pub fn bench_hammings(c: &mut Criterion) {
             .expect("Failed to create tensor A");
         let tensor_b = Tensor::<u1x8>::try_from_slice(&matrix_b_data, &[batch_size, dimension])
             .expect("Failed to create tensor B");
-        let packed_b = PackedMatrix::try_pack(&tensor_b).expect("Failed to pack B");
 
-        group.bench_function("numkong", |bench| {
-            bench.iter(|| black_box(tensor_a.hammings_packed(&packed_b)))
-        });
+        match try_spawn_pool() {
+            Some(mut pool) => {
+                let packed_b = pack_dots_matrix(&tensor_b, Some(&mut pool));
+                group.bench_function("numkong", |bench| {
+                    bench.iter(|| black_box(tensor_a.hammings_packed_parallel(&packed_b, &mut pool)))
+                });
+            }
+            None => {
+                let packed_b = pack_dots_matrix(&tensor_b, None);
+                group.bench_function("numkong", |bench| {
+                    bench.iter(|| black_box(tensor_a.hammings_packed(&packed_b)))
+                });
+            }
+        }
         group.finish();
     }
 }
@@ -440,7 +432,7 @@ pub fn bench_jaccards(c: &mut Criterion) {
     capabilities::configure_thread();
     let dimension = get_vector_dims();
     let byte_count = dimension.div_ceil(8);
-    let batch_size = get_batch_size();
+    let batch_size = get_vector_dims();
 
     if should_run_benchmark("similarities/jaccards/u1x8") {
         let mut group = c.benchmark_group("similarities/jaccards/u1x8");
@@ -453,11 +445,21 @@ pub fn bench_jaccards(c: &mut Criterion) {
             .expect("Failed to create tensor A");
         let tensor_b = Tensor::<u1x8>::try_from_slice(&matrix_b_data, &[batch_size, dimension])
             .expect("Failed to create tensor B");
-        let packed_b = PackedMatrix::try_pack(&tensor_b).expect("Failed to pack B");
 
-        group.bench_function("numkong", |bench| {
-            bench.iter(|| black_box(tensor_a.jaccards_packed(&packed_b)))
-        });
+        match try_spawn_pool() {
+            Some(mut pool) => {
+                let packed_b = pack_dots_matrix(&tensor_b, Some(&mut pool));
+                group.bench_function("numkong", |bench| {
+                    bench.iter(|| black_box(tensor_a.jaccards_packed_parallel(&packed_b, &mut pool)))
+                });
+            }
+            None => {
+                let packed_b = pack_dots_matrix(&tensor_b, None);
+                group.bench_function("numkong", |bench| {
+                    bench.iter(|| black_box(tensor_a.jaccards_packed(&packed_b)))
+                });
+            }
+        }
         group.finish();
     }
 }

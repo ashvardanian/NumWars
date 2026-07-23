@@ -26,7 +26,7 @@ use std::hint::black_box;
 use std::ops::{Add, Mul};
 use utils::*;
 
-// region: Operation model
+// region: Operation Model
 
 #[derive(Clone, Copy)]
 enum EachOp {
@@ -52,7 +52,7 @@ impl EachOp {
 
 // endregion
 
-// region: Baseline kernels
+// region: Baseline Kernels
 
 fn baseline_sum<T: Add<Output = T> + Copy>(a: &[T], b: &[T], out: &mut [T]) {
     for i in 0..a.len() {
@@ -68,7 +68,7 @@ fn baseline_scale<T: Mul<Output = T> + Copy>(a: &[T], alpha: T, out: &mut [T]) {
 
 // endregion
 
-// region: Backend run traits
+// region: Per-Library Run Traits
 
 trait RunBaseline: Sized {
     fn run(_op: EachOp, _group: &mut BenchmarkGroup<'_, WallTime>, _a: &[Self], _b: &[Self], _c: &[Self]) {}
@@ -303,7 +303,7 @@ impl RunNalgebra for i8 {}
 
 // endregion
 
-// region: Generic helper
+// region: Generic Helpers
 
 fn bench_each_op_dtype<T>(c: &mut Criterion, op: EachOp, dtype: &str, size: usize, init: T)
 where
@@ -333,7 +333,7 @@ where
 
 // endregion
 
-// region: Entry points
+// region: Entry Points
 
 pub fn bench_sum(c: &mut Criterion) {
     capabilities::configure_thread();

@@ -40,7 +40,7 @@ use numkong::{
 use std::hint::black_box;
 use std::iter::Sum;
 use std::ops::AddAssign;
-use std::os::raw::c_int;
+use std::ffi::c_int;
 use utils::*;
 
 // region: Baseline Implementations
@@ -546,7 +546,7 @@ fn baseline_jensenshannon<T: Float + Sum>(a: &[T], b: &[T]) -> Option<T> {
 
 // endregion
 
-// region: Per-library Run traits
+// region: Per-Library Run Traits
 
 trait RunBaselineAngular: Sized {
     fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _a: &[Self], _b: &[Self]) {}
@@ -814,7 +814,7 @@ impl<T: JensenShannon> RunNumKongJensenShannon for T {
 
 // endregion
 
-// region: Generic helpers
+// region: Generic Helpers
 
 fn bench_angular_dtype<T>(c: &mut Criterion, dtype: &str, dims: usize, init: T)
 where

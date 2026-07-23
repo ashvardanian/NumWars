@@ -28,7 +28,7 @@ use rand::Rng;
 use std::hint::black_box;
 use utils::*;
 
-// region: Operation model
+// region: Operation Model
 
 #[derive(Clone, Copy)]
 enum MeshOp {
@@ -49,7 +49,7 @@ impl MeshOp {
 
 // endregion
 
-// region: Baseline implementations
+// region: Baseline Implementations
 
 /// Baseline RMSD: simple point-to-point root mean square deviation (no alignment).
 fn baseline_rmsd<T: Float>(a_points: &[[T; 3]], b_points: &[[T; 3]]) -> T {
@@ -254,19 +254,19 @@ where
 
 // endregion
 
-// region: Data generation
+// region: Data Generation
 
 fn generate_point_cloud<T>(rng: &mut impl Rng, count: usize) -> Vec<[T; 3]> {
     generate_random::<[T; 3]>(rng, count)
 }
 
 fn get_point_count() -> usize {
-    get_env_parsed("NUMWARS_MESH_POINTS", get_batch_size())
+    get_env_parsed("NUMWARS_MESH_POINTS", get_vector_dims())
 }
 
 // endregion
 
-// region: Per-library run traits
+// region: Per-Library Run Traits
 
 trait RunBaseline: Sized {
     fn run(_op: MeshOp, _group: &mut BenchmarkGroup<'_, WallTime>, _a: &[[Self; 3]], _b: &[[Self; 3]]) {}
@@ -384,7 +384,7 @@ impl RunNumKong for bf16 {}
 
 // endregion
 
-// region: Generic helper
+// region: Generic Helpers
 
 fn bench_mesh_op_dtype<T>(c: &mut Criterion, rng: &mut impl Rng, op: MeshOp, dtype: &str, count: usize)
 where
