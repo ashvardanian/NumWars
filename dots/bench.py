@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Packed GEMM-style benchmarks: NumKong vs NumPy.
 
@@ -11,50 +10,31 @@ Can be run with uv:
 Or with traditional pip:
     pip install -e ".[dots]"
     python dots/bench.py
-
-Environment variables:
-    NUMWARS_FILTER - Regex filter for benchmark names
-    NUMWARS_DIMS_WIDTH - Matrix C width (default: 2048)
-    NUMWARS_DIMS_HEIGHT - Matrix C height (default: 2048)
-    NUMWARS_DIMS_DEPTH - Shared dimension (default: 2048)
 """
 
-import argparse
 import json
-import os
-import re
 import sys
 from dataclasses import dataclass
-from typing import List
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
-import tabulate
+
+from numwars import (
+    Settings,
+    calculate_gso_per_sec,
+    format_duration,
+    measure_average_duration,
+    normalize_dtype_name,
+    numkong_dtype_name,
+    parse_numpy_dtype,
+    print_results_table,
+    print_settings,
+    read_settings,
+)
 
 try:
     import numkong as nk
 except ImportError:
     print("Error: numkong not found. Install with: pip install numkong")
-    sys.exit(1)
-
-try:
-    from utils import (
-        add_common_args,
-        calculate_gso_per_sec,
-        format_duration,
-        get_matrix_dims_depth,
-        get_matrix_dims_height,
-        get_matrix_dims_width,
-        measure_average_duration,
-        normalize_dtype_name,
-        numkong_dtype_name,
-        parse_numpy_dtype,
-        print_results_table,
-        should_run_benchmark,
-    )
-except ImportError:
-    print("Error: Could not import utils.py. Make sure it's in the parent directory.")
     sys.exit(1)
 
 
@@ -69,7 +49,7 @@ class BenchmarkResult:
     depth: int
     duration_secs: float
     gso_per_sec: float
-    throughput_gbs: float
+    throughput_gibs: float
 
 
 def dtype_itemsize(dtype_name: str) -> int:
@@ -96,19 +76,16 @@ def display_signature_name(input_dtype: str, output_dtype: str) -> str:
     return f"{input_dtype} \u2192 {output_dtype}"
 
 
-
-def build_matrix(shape: tuple[int, int], dtype_str: str, seed: int) -> np.ndarray:
-    rng = np.random.default_rng(seed)
+def build_matrix(shape: tuple[int, int], dtype_str: str, rng: np.random.Generator) -> np.ndarray:
     dtype = parse_numpy_dtype(dtype_str)
     data = rng.uniform(-1.0, 1.0, size=shape).astype(np.float32)
     return data.astype(dtype)
 
 
-def benchmark_numkong(
-    height: int, width: int, depth: int, dtype_str: str, warmup: float, profile: float
-) -> BenchmarkResult:
-    a = build_matrix((height, depth), dtype_str, 42)
-    b = build_matrix((width, depth), dtype_str, 43)
+def benchmark_numkong(height: int, width: int, depth: int, dtype_str: str, settings: Settings) -> BenchmarkResult:
+    rng = np.random.default_rng(settings.seed)
+    a = build_matrix((height, depth), dtype_str, rng)
+    b = build_matrix((width, depth), dtype_str, rng)
     packed_b = nk.dots_pack(b, dtype=numkong_dtype_name(dtype_str))
     sample_output = nk.dots_packed(a, packed_b)
     output_dtype = normalize_dtype_name(getattr(sample_output, "dtype", dtype_str))
@@ -117,14 +94,11 @@ def benchmark_numkong(
 
     duration = measure_average_duration(
         lambda: nk.dots_packed(a, packed_b, out=output_tensor),
-        warmup,
-        profile,
+        settings,
     )
     num_operations = 2 * height * width * depth
     out_itemsize = dtype_itemsize(output_dtype)
-    bytes_processed = (height * depth + width * depth) * a.itemsize + (
-        height * width
-    ) * out_itemsize
+    bytes_processed = (height * depth + width * depth) * a.itemsize + (height * width) * out_itemsize
     return BenchmarkResult(
         library="NumKong",
         input_dtype=dtype_str,
@@ -135,19 +109,16 @@ def benchmark_numkong(
         depth=depth,
         duration_secs=duration,
         gso_per_sec=calculate_gso_per_sec(num_operations, duration),
-        throughput_gbs=bytes_processed / duration / 1e9,
+        throughput_gibs=bytes_processed / duration / 2**30,
     )
 
 
-def benchmark_numpy(
-    height: int, width: int, depth: int, dtype_str: str, warmup: float, profile: float
-) -> BenchmarkResult:
-    a = build_matrix((height, depth), dtype_str, 42)
-    b = build_matrix((width, depth), dtype_str, 43)
+def benchmark_numpy(height: int, width: int, depth: int, dtype_str: str, settings: Settings) -> BenchmarkResult:
+    rng = np.random.default_rng(settings.seed)
+    a = build_matrix((height, depth), dtype_str, rng)
+    b = build_matrix((width, depth), dtype_str, rng)
     out = np.empty((height, width), dtype=a.dtype)
-    duration = measure_average_duration(
-        lambda: np.matmul(a, b.T, out=out), warmup, profile
-    )
+    duration = measure_average_duration(lambda: np.matmul(a, b.T, out=out), settings)
     num_operations = 2 * height * width * depth
     bytes_processed = (height * depth + width * depth + height * width) * a.itemsize
     return BenchmarkResult(
@@ -160,7 +131,7 @@ def benchmark_numpy(
         depth=depth,
         duration_secs=duration,
         gso_per_sec=calculate_gso_per_sec(num_operations, duration),
-        throughput_gbs=bytes_processed / duration / 1e9,
+        throughput_gibs=bytes_processed / duration / 2**30,
     )
 
 
@@ -181,35 +152,17 @@ def result_to_entry(result: BenchmarkResult) -> dict:
         "depth": result.depth,
         "primary_value": result.gso_per_sec,
         "unit": "GSO/s",
-        "throughput_gbs": result.throughput_gbs,
+        "throughput_gibs": result.throughput_gibs,
         "duration_secs": result.duration_secs,
     }
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Benchmark packed GEMM-style dot products",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    add_common_args(parser)
-    parser.add_argument(
-        "--output-format",
-        choices=["table", "json"],
-        default="table",
-        help="Choose human-readable table output or machine-readable JSON (default: table).",
-    )
-    args = parser.parse_args()
+    settings = read_settings()
+    if settings.output == "table":
+        print_settings(settings)
 
-    height = get_matrix_dims_height()
-    width = get_matrix_dims_width()
-    depth = get_matrix_dims_depth()
-
-    filter_pattern = None
-    if args.filter:
-        try:
-            filter_pattern = re.compile(args.filter)
-        except re.error as e:
-            print(f"Warning: Invalid regex pattern '{args.filter}': {e}")
+    height, width, depth = settings.dims_height, settings.dims_width, settings.dims_depth
 
     metadata = {
         "height": height,
@@ -227,27 +180,19 @@ def main():
         ("numpy", "f32"),
     ]
 
-    all_results: List[BenchmarkResult] = []
+    all_results: list[BenchmarkResult] = []
     for library_slug, dtype in candidates:
         benchmark_name = f"dots/{library_slug}/{dtype}/{height}x{width}x{depth}"
-        if not should_run_benchmark(benchmark_name, filter_pattern):
+        if not settings.selects(benchmark_name):
             continue
-        if args.output_format == "table":
+        if settings.output == "table":
             print(f"Benchmarking {benchmark_name}")
         if library_slug == "numkong":
-            all_results.append(
-                benchmark_numkong(
-                    height, width, depth, dtype, args.warmup, args.time_limit
-                )
-            )
+            all_results.append(benchmark_numkong(height, width, depth, dtype, settings))
         else:
-            all_results.append(
-                benchmark_numpy(
-                    height, width, depth, dtype, args.warmup, args.time_limit
-                )
-            )
+            all_results.append(benchmark_numpy(height, width, depth, dtype, settings))
 
-    if args.output_format == "json":
+    if settings.output == "json":
         print(
             json.dumps(
                 {
@@ -264,16 +209,14 @@ def main():
         print("No benchmarks were run.")
         return
 
-    print(
-        f"Packed GEMM-style dots: A({height}x{depth}) @ B.T({width}x{depth}) -> ({height}x{width})"
-    )
+    print(f"Packed GEMM-style dots: A({height}x{depth}) @ B.T({width}x{depth}) -> ({height}x{width})")
     print()
     table_rows = [
         {
             "Library": result.library,
             "Precision": result.display_signature,
             "GSO/s": f"{result.gso_per_sec:.2f}",
-            "GB/s": f"{result.throughput_gbs:.2f}",
+            "GB/s": f"{result.throughput_gibs:.2f}",
             "Time": format_duration(result.duration_secs),
         }
         for result in all_results

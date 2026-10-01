@@ -22,30 +22,20 @@
 //! NUMWARS_FILTER="dots/f32" cargo bench --features bench_dots
 //! ```
 //!
-//! Environment variables:
-//! - NUMWARS_DIMS_WIDTH: Matrix C width n (default: 2048)
-//! - NUMWARS_DIMS_HEIGHT: Matrix C height m (default: 2048)
-//! - NUMWARS_DIMS_DEPTH: Shared dimension k (default: 2048)
-//! - NUMWARS_FILTER: Regex to filter benchmark names (default: none, runs all)
-//! - NUMWARS_WARMUP_SECONDS: Warmup duration (default: 3.0)
-//! - NUMWARS_PROFILE_SECONDS: Measurement duration (default: 10.0)
-//!
 //! Benchmark naming: dots/{dtype}/{height}x{width}x{depth}
-//! Examples: dots/f32/2048x2048x2048, dots/i8/2048x2048x2048
+//! Examples: dots/f32/1024x128x1536, dots/i8/1024x128x1536
 
-#[path = "../utils.rs"]
-mod utils;
+use std::hint::black_box;
 
 use criterion::measurement::WallTime;
-use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion, Throughput};
+use criterion::{BenchmarkGroup, Criterion, Throughput};
 use numkong::prelude::*;
 use numkong::{bf16, capabilities, e2m3, e3m2, e4m3, e5m2, f16, Dots};
-use std::hint::black_box;
-use utils::*;
 
-/// Resolve the parallelism setting for faer based on NUMWARS_THREADS.
-fn faer_parallelism() -> faer::Par {
-    let threads = get_thread_count();
+use numwars::{pack_dots_matrix, propagate_thread_count, try_spawn_pool, Settings};
+
+/// Resolve the parallelism setting for faer from the thread count.
+fn faer_parallelism(threads: usize) -> faer::Par {
     if threads <= 1 {
         faer::Par::Seq
     } else {
@@ -83,11 +73,11 @@ trait RunNumKong: Dots + Clone + Send + Sync + Sized
 where
     Self::Accumulator: Clone + Default + Send + Sync,
 {
-    fn run(group: &mut BenchmarkGroup<'_, WallTime>, m: usize, n: usize, k: usize, v: Self) {
+    fn run(group: &mut BenchmarkGroup<'_, WallTime>, m: usize, n: usize, k: usize, v: Self, threads: usize) {
         let a = Tensor::<Self>::try_full(&[m, k], v.clone()).expect("Failed to allocate A");
         let b = Tensor::<Self>::try_full(&[n, k], v).expect("Failed to allocate B");
         let mut c_out = Tensor::<Self::Accumulator>::try_zeros(&[m, n]).expect("Failed to allocate C");
-        match try_spawn_pool() {
+        match try_spawn_pool(threads) {
             Some(mut pool) => {
                 let packed_b = pack_dots_matrix(&b, Some(&mut pool));
                 group.bench_function("numkong", |bench| {
@@ -225,11 +215,10 @@ impl RunNalgebra for e2m3 {}
 impl RunNalgebra for e3m2 {}
 
 trait RunFaer: Sized {
-    fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _m: usize, _n: usize, _k: usize, _v: Self) {}
+    fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _m: usize, _n: usize, _k: usize, _v: Self, _par: faer::Par) {}
 }
 impl RunFaer for f32 {
-    fn run(group: &mut BenchmarkGroup<'_, WallTime>, m: usize, n: usize, k: usize, v: f32) {
-        let par = faer_parallelism();
+    fn run(group: &mut BenchmarkGroup<'_, WallTime>, m: usize, n: usize, k: usize, v: f32, par: faer::Par) {
         let a = faer::Mat::<f32>::from_fn(m, k, |_, _| v);
         let b = faer::Mat::<f32>::from_fn(n, k, |_, _| v);
         let mut c_out = faer::Mat::<f32>::zeros(m, n);
@@ -249,8 +238,7 @@ impl RunFaer for f32 {
     }
 }
 impl RunFaer for f64 {
-    fn run(group: &mut BenchmarkGroup<'_, WallTime>, m: usize, n: usize, k: usize, v: f64) {
-        let par = faer_parallelism();
+    fn run(group: &mut BenchmarkGroup<'_, WallTime>, m: usize, n: usize, k: usize, v: f64, par: faer::Par) {
         let a = faer::Mat::<f64>::from_fn(m, k, |_, _| v);
         let b = faer::Mat::<f64>::from_fn(n, k, |_, _| v);
         let mut c_out = faer::Mat::<f64>::zeros(m, n);
@@ -282,50 +270,48 @@ impl RunFaer for e3m2 {}
 
 // region: Generic Helpers
 
-fn bench_dtype<T>(c: &mut Criterion, dtype: &str, init: T)
+fn bench_dtype<T>(c: &mut Criterion, settings: &Settings, dtype: &str, init: T)
 where
     T: Dots + Clone + Send + Sync + RunNumKong + RunMatrixMultiply + RunNdarray + RunNalgebra + RunFaer,
     T::Accumulator: Clone + Default + Send + Sync,
 {
-    let m = get_matrix_dims_height();
-    let n = get_matrix_dims_width();
-    let k = get_matrix_dims_depth();
+    let (m, n, k) = (settings.dims_height, settings.dims_width, settings.dims_depth);
     let name = format!("dots/{}/{}x{}x{}", dtype, m, n, k);
-    if !should_run_benchmark(&name) {
+    if !settings.selects(&name) {
         return;
     }
     let mut group = c.benchmark_group(name);
     group.throughput(Throughput::Elements(2 * m as u64 * n as u64 * k as u64));
 
-    <T as RunNumKong>::run(&mut group, m, n, k, init.clone());
+    <T as RunNumKong>::run(&mut group, m, n, k, init.clone(), settings.threads);
     <T as RunMatrixMultiply>::run(&mut group, m, n, k, init.clone());
     <T as RunNdarray>::run(&mut group, m, n, k, init.clone());
     <T as RunNalgebra>::run(&mut group, m, n, k, init.clone());
-    <T as RunFaer>::run(&mut group, m, n, k, init);
+    <T as RunFaer>::run(&mut group, m, n, k, init, faer_parallelism(settings.threads));
 
     group.finish();
 }
 
-fn bench_dots(c: &mut Criterion) {
-    capabilities::configure_thread();
-    propagate_thread_count();
-    bench_dtype(c, "f32", 1.0f32);
-    bench_dtype(c, "f64", 1.0f64);
-    bench_dtype(c, "i8", 1i8);
-    bench_dtype(c, "u8", 1u8);
-    bench_dtype(c, "bf16", bf16::from_f32(1.0));
-    bench_dtype(c, "f16", f16::from_f32(1.0));
-    bench_dtype(c, "e4m3", e4m3::from_f32(1.0));
-    bench_dtype(c, "e5m2", e5m2::from_f32(1.0));
-    bench_dtype(c, "e2m3", e2m3::from_f32(1.0));
-    bench_dtype(c, "e3m2", e3m2::from_f32(1.0));
+fn bench_dots(c: &mut Criterion, settings: &Settings) {
+    bench_dtype(c, settings, "f32", 1.0f32);
+    bench_dtype(c, settings, "f64", 1.0f64);
+    bench_dtype(c, settings, "i8", 1i8);
+    bench_dtype(c, settings, "u8", 1u8);
+    bench_dtype(c, settings, "bf16", bf16::from_f32(1.0));
+    bench_dtype(c, settings, "f16", f16::from_f32(1.0));
+    bench_dtype(c, settings, "e4m3", e4m3::from_f32(1.0));
+    bench_dtype(c, settings, "e5m2", e5m2::from_f32(1.0));
+    bench_dtype(c, settings, "e2m3", e2m3::from_f32(1.0));
+    bench_dtype(c, settings, "e3m2", e3m2::from_f32(1.0));
 }
 
 // endregion
 
-criterion_group! {
-    name = benches;
-    config = utils::configure_criterion();
-    targets = bench_dots
+fn main() {
+    let settings = Settings::read();
+    capabilities::configure_thread();
+    propagate_thread_count(settings.threads);
+    let mut criterion = numwars::configure_criterion(&settings);
+    bench_dots(&mut criterion, &settings);
+    criterion.final_summary();
 }
-criterion_main!(benches);

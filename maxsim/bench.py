@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 MaxSim (ColBERT-style late-interaction) benchmarks: NumKong vs NumPy.
 
@@ -12,46 +11,26 @@ Can be run with uv:
 Or with traditional pip:
     pip install -e ".[maxsim]"
     python maxsim/bench.py
-
-Environment variables:
-    NUMWARS_FILTER - Regex filter for benchmark names
-    NUMWARS_DIMS_WIDTH - Document count (default: 2048)
-    NUMWARS_DIMS_HEIGHT - Query count (default: 2048)
-    NUMWARS_DIMS_DEPTH - Shared dimension (default: 2048)
 """
 
-import argparse
 import json
-import os
-import re
 import sys
 from dataclasses import dataclass
-from typing import List
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-# Import utils first — it sets single-threaded env vars (OMP_NUM_THREADS, etc.)
-# that must be in place before numpy/OpenBLAS initializes.
-try:
-    from utils import (
-        add_common_args,
-        calculate_gso_per_sec,
-        format_duration,
-        get_matrix_dims_depth,
-        get_matrix_dims_height,
-        get_matrix_dims_width,
-        measure_average_duration,
-        numkong_dtype_name,
-        parse_numpy_dtype,
-        print_results_table,
-        should_run_benchmark,
-    )
-except ImportError:
-    print("Error: Could not import utils.py. Make sure it's in the parent directory.")
-    sys.exit(1)
 
 import numpy as np
-import tabulate
+
+# Import numwars first: it sets the thread counts that must be in place before NumPy loads OpenBLAS.
+from numwars import (
+    Settings,
+    calculate_gso_per_sec,
+    format_duration,
+    measure_average_duration,
+    numkong_dtype_name,
+    parse_numpy_dtype,
+    print_results_table,
+    print_settings,
+    read_settings,
+)
 
 try:
     import numkong as nk
@@ -84,18 +63,16 @@ def display_signature_name(input_dtype: str, output_dtype: str) -> str:
     return f"{input_dtype} \u2192 {output_dtype}"
 
 
-def build_matrix(shape: tuple[int, int], dtype_str: str, seed: int) -> np.ndarray:
-    rng = np.random.default_rng(seed)
+def build_matrix(shape: tuple[int, int], dtype_str: str, rng: np.random.Generator) -> np.ndarray:
     dtype = parse_numpy_dtype(dtype_str)
     data = rng.uniform(-1.0, 1.0, size=shape).astype(np.float32)
     return data.astype(dtype)
 
 
-def benchmark_numkong(
-    height: int, width: int, depth: int, dtype_str: str, warmup: float, profile: float
-) -> BenchmarkResult:
-    queries = build_matrix((height, depth), dtype_str, 42)
-    documents = build_matrix((width, depth), dtype_str, 43)
+def benchmark_numkong(height: int, width: int, depth: int, dtype_str: str, settings: Settings) -> BenchmarkResult:
+    rng = np.random.default_rng(settings.seed)
+    queries = build_matrix((height, depth), dtype_str, rng)
+    documents = build_matrix((width, depth), dtype_str, rng)
     nk_dtype = numkong_dtype_name(dtype_str)
     packed_queries = nk.maxsim_pack(queries, dtype=nk_dtype)
     packed_documents = nk.maxsim_pack(documents, dtype=nk_dtype)
@@ -103,8 +80,7 @@ def benchmark_numkong(
 
     duration = measure_average_duration(
         lambda: nk.maxsim_packed(packed_queries, packed_documents),
-        warmup,
-        profile,
+        settings,
     )
     num_operations = 2 * height * width * depth
     return BenchmarkResult(
@@ -120,18 +96,17 @@ def benchmark_numkong(
     )
 
 
-def benchmark_numpy(
-    height: int, width: int, depth: int, warmup: float, profile: float
-) -> BenchmarkResult:
-    queries = build_matrix((height, depth), "f32", 42)
-    documents = build_matrix((width, depth), "f32", 43)
+def benchmark_numpy(height: int, width: int, depth: int, settings: Settings) -> BenchmarkResult:
+    rng = np.random.default_rng(settings.seed)
+    queries = build_matrix((height, depth), "f32", rng)
+    documents = build_matrix((width, depth), "f32", rng)
     out = np.empty((height, width), dtype=np.float32)
 
     def _numpy_maxsim():
         np.matmul(queries, documents.T, out=out)
         return out.max(axis=1).sum()
 
-    duration = measure_average_duration(_numpy_maxsim, warmup, profile)
+    duration = measure_average_duration(_numpy_maxsim, settings)
     num_operations = 2 * height * width * depth
     return BenchmarkResult(
         library="NumPy",
@@ -168,29 +143,11 @@ def result_to_entry(result: BenchmarkResult) -> dict:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Benchmark MaxSim (ColBERT-style late-interaction) scoring",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    add_common_args(parser)
-    parser.add_argument(
-        "--output-format",
-        choices=["table", "json"],
-        default="table",
-        help="Choose human-readable table output or machine-readable JSON (default: table).",
-    )
-    args = parser.parse_args()
+    settings = read_settings()
+    if settings.output == "table":
+        print_settings(settings)
 
-    height = get_matrix_dims_height()
-    width = get_matrix_dims_width()
-    depth = get_matrix_dims_depth()
-
-    filter_pattern = None
-    if args.filter:
-        try:
-            filter_pattern = re.compile(args.filter)
-        except re.error as e:
-            print(f"Warning: Invalid regex pattern '{args.filter}': {e}")
+    height, width, depth = settings.dims_height, settings.dims_width, settings.dims_depth
 
     metadata = {
         "height": height,
@@ -207,25 +164,19 @@ def main():
         ("numpy", "f32"),
     ]
 
-    all_results: List[BenchmarkResult] = []
+    all_results: list[BenchmarkResult] = []
     for library_slug, dtype in candidates:
         benchmark_name = f"maxsim/{library_slug}/{dtype}/{height}x{width}x{depth}"
-        if not should_run_benchmark(benchmark_name, filter_pattern):
+        if not settings.selects(benchmark_name):
             continue
-        if args.output_format == "table":
+        if settings.output == "table":
             print(f"Benchmarking {benchmark_name}")
         if library_slug == "numkong":
-            all_results.append(
-                benchmark_numkong(
-                    height, width, depth, dtype, args.warmup, args.time_limit
-                )
-            )
+            all_results.append(benchmark_numkong(height, width, depth, dtype, settings))
         else:
-            all_results.append(
-                benchmark_numpy(height, width, depth, args.warmup, args.time_limit)
-            )
+            all_results.append(benchmark_numpy(height, width, depth, settings))
 
-    if args.output_format == "json":
+    if settings.output == "json":
         print(
             json.dumps(
                 {

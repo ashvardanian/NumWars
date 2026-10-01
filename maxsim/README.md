@@ -25,7 +25,7 @@ ColBERT-style late-interaction scoring benchmarks comparing NumKong against ndar
 ### Rust
 
 ```bash
-# Default 2048×2048×2048 workload
+# Default 1024×128×1536 workload
 cargo bench --bench bench_maxsim --features bench_maxsim
 
 # Smaller 128×128×256 workload

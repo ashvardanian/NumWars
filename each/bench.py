@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Elementwise operation benchmarks: NumKong vs NumPy.
 
@@ -11,44 +10,28 @@ Can be run with uv:
 Or with traditional pip:
     pip install -e ".[each]"
     python each/bench.py
-
-Environment variables:
-    NUMWARS_FILTER - Regex filter for benchmark names
-    NUMWARS_DIMS - Tensor size in elements (default: 1000000)
 """
 
-import argparse
 import json
-import os
-import re
 import sys
 from dataclasses import dataclass
-from typing import List, Optional
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
+
+from numwars import (
+    Settings,
+    format_duration,
+    measure_average_duration,
+    parse_numpy_dtype,
+    print_results_table,
+    print_settings,
+    read_settings,
+)
 
 try:
     import numkong as nk
 except ImportError:
     print("Error: numkong not found. Install with: pip install numkong")
-    sys.exit(1)
-
-try:
-    from utils import (
-        add_common_args,
-        format_duration,
-        get_env,
-        get_tensor_dims,
-        measure_average_duration,
-        normalize_dtype_name,
-        parse_numpy_dtype,
-        print_results_table,
-        should_run_benchmark,
-    )
-except ImportError:
-    print("Error: Could not import utils.py. Make sure it's in the parent directory.")
     sys.exit(1)
 
 # Suppress floating-point warnings during benchmarking
@@ -64,7 +47,7 @@ class BenchmarkResult:
     display_signature: str
     elements: int
     duration_secs: float
-    throughput_gbs: float
+    throughput_gibs: float
 
 
 def dtype_itemsize(dtype_name: str) -> int:
@@ -84,8 +67,7 @@ def display_signature(input_dtype: str, output_dtype: str) -> str:
     return f"{input_dtype} \u2192 {output_dtype}"
 
 
-def build_array(elements: int, dtype_str: str, seed: int) -> np.ndarray:
-    rng = np.random.default_rng(seed)
+def build_array(elements: int, dtype_str: str, rng: np.random.Generator) -> np.ndarray:
     if dtype_str == "bf16":
         return rng.uniform(-1.0, 1.0, size=(elements,)).astype(np.float32).astype(parse_numpy_dtype("bf16"))
     np_dtype = parse_numpy_dtype(dtype_str)
@@ -94,19 +76,17 @@ def build_array(elements: int, dtype_str: str, seed: int) -> np.ndarray:
     return rng.uniform(-1.0, 1.0, size=(elements,)).astype(np.float32).astype(np_dtype)
 
 
-
-def benchmark_numkong_add(
-    elements: int, dtype_str: str, warmup: float, profile: float, seed: int = 42,
-) -> BenchmarkResult:
-    a = build_array(elements, dtype_str, seed)
-    b = build_array(elements, dtype_str, seed + 1)
+def benchmark_numkong_add(elements: int, dtype_str: str, settings: Settings) -> BenchmarkResult:
+    rng = np.random.default_rng(settings.seed)
+    a = build_array(elements, dtype_str, rng)
+    b = build_array(elements, dtype_str, rng)
 
     if dtype_str == "bf16":
         func = lambda: nk.add(a, b, a_dtype="bfloat16", b_dtype="bfloat16", out_dtype="bfloat16")
     else:
         func = lambda: nk.add(a, b)
 
-    duration = measure_average_duration(func, warmup, profile)
+    duration = measure_average_duration(func, settings)
     itemsize = dtype_itemsize(dtype_str)
     bytes_processed = 2 * elements * itemsize + elements * itemsize
     return BenchmarkResult(
@@ -117,20 +97,19 @@ def benchmark_numkong_add(
         display_signature=display_signature(dtype_str, dtype_str),
         elements=elements,
         duration_secs=duration,
-        throughput_gbs=bytes_processed / duration / 1e9,
+        throughput_gibs=bytes_processed / duration / 2**30,
     )
 
 
-def benchmark_numpy_add(
-    elements: int, dtype_str: str, warmup: float, profile: float, seed: int = 42,
-) -> BenchmarkResult:
-    a = build_array(elements, dtype_str, seed)
-    b = build_array(elements, dtype_str, seed + 1)
+def benchmark_numpy_add(elements: int, dtype_str: str, settings: Settings) -> BenchmarkResult:
+    rng = np.random.default_rng(settings.seed)
+    a = build_array(elements, dtype_str, rng)
+    b = build_array(elements, dtype_str, rng)
     out = np.empty_like(a)
 
     func = lambda: np.add(a, b, out=out)
 
-    duration = measure_average_duration(func, warmup, profile)
+    duration = measure_average_duration(func, settings)
     itemsize = dtype_itemsize(dtype_str)
     bytes_processed = 2 * elements * itemsize + elements * itemsize
     return BenchmarkResult(
@@ -141,7 +120,7 @@ def benchmark_numpy_add(
         display_signature=display_signature(dtype_str, dtype_str),
         elements=elements,
         duration_secs=duration,
-        throughput_gbs=bytes_processed / duration / 1e9,
+        throughput_gibs=bytes_processed / duration / 2**30,
     )
 
 
@@ -176,35 +155,19 @@ def result_to_entry(result: BenchmarkResult) -> dict:
         "output_dtype": result.output_dtype,
         "display_signature": result.display_signature,
         "elements": result.elements,
-        "primary_value": result.throughput_gbs,
+        "primary_value": result.throughput_gibs,
         "unit": "GB/s",
-        "throughput_gbs": result.throughput_gbs,
+        "throughput_gibs": result.throughput_gibs,
         "duration_secs": result.duration_secs,
     }
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Benchmark elementwise operations: NumKong vs NumPy",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    add_common_args(parser)
-    parser.add_argument(
-        "--output-format",
-        choices=["table", "json"],
-        default="table",
-        help="Choose human-readable table output or machine-readable JSON (default: table).",
-    )
-    args = parser.parse_args()
+    settings = read_settings()
+    if settings.output == "table":
+        print_settings(settings)
 
-    elements = get_tensor_dims()
-
-    filter_pattern = None
-    if args.filter:
-        try:
-            filter_pattern = re.compile(args.filter)
-        except re.error as e:
-            print(f"Warning: Invalid regex pattern '{args.filter}': {e}")
+    elements = settings.batch_size
 
     metadata = {
         "elements": elements,
@@ -212,19 +175,19 @@ def main():
         "numpy_version": np.__version__,
     }
 
-    all_results: List[BenchmarkResult] = []
+    all_results: list[BenchmarkResult] = []
     for library_slug, operation, dtype_str in candidates:
         benchmark_name = f"each/{operation}/{dtype_str}"
-        if not should_run_benchmark(benchmark_name, filter_pattern):
+        if not settings.selects(benchmark_name):
             continue
-        if args.output_format == "table":
+        if settings.output == "table":
             print(f"Benchmarking {benchmark_name} ({library_slug})")
 
         func = dispatch[(library_slug, operation)]
-        result = func(elements, dtype_str, args.warmup, args.time_limit, args.seed)
+        result = func(elements, dtype_str, settings)
         all_results.append(result)
 
-    if args.output_format == "json":
+    if settings.output == "json":
         print(
             json.dumps(
                 {
@@ -249,7 +212,7 @@ def main():
             "Library": result.library,
             "Operation": result.operation,
             "Precision": result.display_signature,
-            "GB/s": f"{result.throughput_gbs:.2f}",
+            "GB/s": f"{result.throughput_gibs:.2f}",
             "Time": format_duration(result.duration_secs),
         }
         for result in all_results

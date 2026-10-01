@@ -8,25 +8,21 @@
 //! NUMWARS_FILTER="haversine" cargo bench --features bench_geospatial
 //! ```
 //!
-//! Environment variables:
-//! - NUMWARS_DIMS: Number of coordinate pairs (default: 2048)
-//! - NUMWARS_FILTER: Regex to filter benchmark names
-//!
 //! Benchmark naming: geospatial/{metric}/{dtype}
 //! Examples: geospatial/haversine/f32, geospatial/haversine/f64
 
-#[path = "../utils.rs"]
-mod utils;
+use std::hint::black_box;
 
 use criterion::measurement::WallTime;
-use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion, Throughput};
+use criterion::{BenchmarkGroup, Criterion, Throughput};
 use geo::{Distance, Geodesic, Haversine as GeoHaversine, Point as GeoPoint};
 use num_traits::Float;
 use numkong::{capabilities, Haversine, Vincenty};
 use rand::distr::uniform::SampleUniform;
-use rand::{Rng, RngExt};
-use std::hint::black_box;
-use utils::*;
+use rand::rngs::StdRng;
+use rand::{Rng, RngExt, SeedableRng};
+
+use numwars::Settings;
 
 // region: Baseline Implementations
 
@@ -396,14 +392,15 @@ impl RunGeoVincenty for f64 {
 
 // region: Generic Helpers
 
-fn bench_haversine_dtype<T>(c: &mut Criterion, rng: &mut impl Rng, dtype: &str, count: usize)
+fn bench_haversine_dtype<T>(c: &mut Criterion, settings: &Settings, rng: &mut impl Rng, dtype: &str)
 where
     T: Float + SampleUniform + RunNumKongHaversine + RunBaselineHaversine + RunGeoHaversine + 'static,
 {
     let name = format!("geospatial/haversine/{dtype}");
-    if !should_run_benchmark(&name) {
+    if !settings.selects(&name) {
         return;
     }
+    let count = settings.batch_size();
     let mut group = c.benchmark_group(name);
     group.throughput(Throughput::Bytes((count * std::mem::size_of::<T>() * 4) as u64));
     let a_lats = generate_random_coords(rng, count, T::from(-90.0).unwrap(), T::from(90.0).unwrap());
@@ -416,14 +413,15 @@ where
     group.finish();
 }
 
-fn bench_vincenty_dtype<T>(c: &mut Criterion, rng: &mut impl Rng, dtype: &str, count: usize)
+fn bench_vincenty_dtype<T>(c: &mut Criterion, settings: &Settings, rng: &mut impl Rng, dtype: &str)
 where
     T: Float + SampleUniform + RunNumKongVincenty + RunBaselineVincenty + RunGeoVincenty + 'static,
 {
     let name = format!("geospatial/vincenty/{dtype}");
-    if !should_run_benchmark(&name) {
+    if !settings.selects(&name) {
         return;
     }
+    let count = settings.batch_size();
     let mut group = c.benchmark_group(name);
     group.throughput(Throughput::Bytes((count * std::mem::size_of::<T>() * 4) as u64));
     let a_lats = generate_random_coords(rng, count, T::from(-90.0).unwrap(), T::from(90.0).unwrap());
@@ -441,20 +439,17 @@ where
 // region: Benchmarks
 
 /// Benchmark Haversine distance
-pub fn bench_haversine(c: &mut Criterion) {
-    capabilities::configure_thread();
-    let count = get_vector_dims();
-    let mut rng = rand::rng();
-    bench_haversine_dtype::<f32>(c, &mut rng, "f32", count);
-    bench_haversine_dtype::<f64>(c, &mut rng, "f64", count);
+pub fn bench_haversine(c: &mut Criterion, settings: &Settings) {
+    let mut rng = StdRng::seed_from_u64(settings.seed.into());
+    bench_haversine_dtype::<f32>(c, settings, &mut rng, "f32");
+    bench_haversine_dtype::<f64>(c, settings, &mut rng, "f64");
 }
 
 /// Benchmark Vincenty distance
-pub fn bench_vincenty(c: &mut Criterion) {
-    let count = get_vector_dims();
-    let mut rng = rand::rng();
-    bench_vincenty_dtype::<f32>(c, &mut rng, "f32", count);
-    bench_vincenty_dtype::<f64>(c, &mut rng, "f64", count);
+pub fn bench_vincenty(c: &mut Criterion, settings: &Settings) {
+    let mut rng = StdRng::seed_from_u64(settings.seed.into());
+    bench_vincenty_dtype::<f32>(c, settings, &mut rng, "f32");
+    bench_vincenty_dtype::<f64>(c, settings, &mut rng, "f64");
 }
 
 // endregion
@@ -501,11 +496,13 @@ mod tests {
 
 // region: Main
 
-criterion_group! {
-    name = benches;
-    config = utils::configure_criterion();
-    targets = bench_haversine, bench_vincenty
+fn main() {
+    let settings = Settings::read();
+    capabilities::configure_thread();
+    let mut criterion = numwars::configure_criterion(&settings);
+    bench_haversine(&mut criterion, &settings);
+    bench_vincenty(&mut criterion, &settings);
+    criterion.final_summary();
 }
-criterion_main!(benches);
 
 // endregion

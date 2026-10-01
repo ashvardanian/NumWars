@@ -9,22 +9,17 @@
 //! NUMWARS_FILTER="each/sum|each/scale" cargo bench --features bench_each
 //! ```
 //!
-//! Environment variables:
-//! - NUMWARS_DIMS: Tensor size in elements (default: 1000000)
-//! - NUMWARS_FILTER: Regex to filter benchmark names
-//!
 //! Benchmark naming: each/{operation}/{dtype}
 //! Examples: each/sum/f32, each/scale/f64
 
-#[path = "../utils.rs"]
-mod utils;
-
-use criterion::measurement::WallTime;
-use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion, Throughput};
-use numkong::{bf16, capabilities, f16, EachScale, EachSum};
 use std::hint::black_box;
 use std::ops::{Add, Mul};
-use utils::*;
+
+use criterion::measurement::WallTime;
+use criterion::{BenchmarkGroup, Criterion, Throughput};
+use numkong::{bf16, capabilities, f16, EachScale, EachSum};
+
+use numwars::Settings;
 
 // region: Operation Model
 
@@ -305,15 +300,16 @@ impl RunNalgebra for i8 {}
 
 // region: Generic Helpers
 
-fn bench_each_op_dtype<T>(c: &mut Criterion, op: EachOp, dtype: &str, size: usize, init: T)
+fn bench_each_op_dtype<T>(c: &mut Criterion, settings: &Settings, op: EachOp, dtype: &str, init: T)
 where
     T: Clone + RunBaseline + RunNumKong + RunNdarray + RunNalgebra + 'static,
 {
     let name = format!("each/{}/{}", op.slug(), dtype);
-    if !should_run_benchmark(&name) {
+    if !settings.selects(&name) {
         return;
     }
 
+    let size = settings.batch_size();
     let mut group = c.benchmark_group(name);
     group.throughput(Throughput::Bytes(
         (op.input_count() * size * std::mem::size_of::<T>()) as u64,
@@ -335,23 +331,20 @@ where
 
 // region: Entry Points
 
-pub fn bench_sum(c: &mut Criterion) {
-    capabilities::configure_thread();
-    let size = get_tensor_dims();
-    bench_each_op_dtype(c, EachOp::Sum, "f32", size, 1.0f32);
-    bench_each_op_dtype(c, EachOp::Sum, "f64", size, 1.0f64);
-    bench_each_op_dtype(c, EachOp::Sum, "f16", size, f16::from_f32(1.0));
-    bench_each_op_dtype(c, EachOp::Sum, "bf16", size, bf16::from_f32(1.0));
-    bench_each_op_dtype(c, EachOp::Sum, "i8", size, 1i8);
+pub fn bench_sum(c: &mut Criterion, settings: &Settings) {
+    bench_each_op_dtype(c, settings, EachOp::Sum, "f32", 1.0f32);
+    bench_each_op_dtype(c, settings, EachOp::Sum, "f64", 1.0f64);
+    bench_each_op_dtype(c, settings, EachOp::Sum, "f16", f16::from_f32(1.0));
+    bench_each_op_dtype(c, settings, EachOp::Sum, "bf16", bf16::from_f32(1.0));
+    bench_each_op_dtype(c, settings, EachOp::Sum, "i8", 1i8);
 }
 
-pub fn bench_scale(c: &mut Criterion) {
-    let size = get_tensor_dims();
-    bench_each_op_dtype(c, EachOp::Scale, "f32", size, 1.0f32);
-    bench_each_op_dtype(c, EachOp::Scale, "f64", size, 1.0f64);
-    bench_each_op_dtype(c, EachOp::Scale, "f16", size, f16::from_f32(1.0));
-    bench_each_op_dtype(c, EachOp::Scale, "bf16", size, bf16::from_f32(1.0));
-    bench_each_op_dtype(c, EachOp::Scale, "i8", size, 1i8);
+pub fn bench_scale(c: &mut Criterion, settings: &Settings) {
+    bench_each_op_dtype(c, settings, EachOp::Scale, "f32", 1.0f32);
+    bench_each_op_dtype(c, settings, EachOp::Scale, "f64", 1.0f64);
+    bench_each_op_dtype(c, settings, EachOp::Scale, "f16", f16::from_f32(1.0));
+    bench_each_op_dtype(c, settings, EachOp::Scale, "bf16", bf16::from_f32(1.0));
+    bench_each_op_dtype(c, settings, EachOp::Scale, "i8", 1i8);
 }
 
 // endregion
@@ -385,11 +378,13 @@ mod tests {
 
 // region: Main
 
-criterion_group! {
-    name = benches;
-    config = utils::configure_criterion();
-    targets = bench_sum, bench_scale
+fn main() {
+    let settings = Settings::read();
+    capabilities::configure_thread();
+    let mut criterion = numwars::configure_criterion(&settings);
+    bench_sum(&mut criterion, &settings);
+    bench_scale(&mut criterion, &settings);
+    criterion.final_summary();
 }
-criterion_main!(benches);
 
 // endregion

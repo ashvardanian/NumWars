@@ -49,11 +49,11 @@ All-pairs distance matrix benchmarks comparing NumKong packed kernels against nd
 ### Rust
 
 ```bash
-# Default 2048×2048 pairs at 2048 dimensions
+# Default 2048×2048 pairs at 1536 dimensions
 cargo bench --bench bench_similarities --features bench_similarities
 
 # Smaller 256×256 pairs at 256 dimensions
-NUMWARS_DIMS=256 \
+NUMWARS_DIMS=256 NUMWARS_BATCH_PER_CORE=256 \
 cargo bench --bench bench_similarities --features bench_similarities
 
 # Focus on one metric

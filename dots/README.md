@@ -35,7 +35,7 @@ Packed GEMM-style matrix multiplication benchmarks comparing NumKong against fae
 ### Rust
 
 ```bash
-# Default 2048×2048×2048 workload
+# Default 1024×128×1536 workload
 cargo bench --bench bench_dots --features bench_dots
 
 # Smaller 512×512×512 workload
@@ -50,6 +50,6 @@ cargo bench --bench bench_dots --features bench_dots
 ### Python
 
 ```bash
-# Default 2048×2048×2048 workload, float32 only
-python dots/bench.py --filter 'dots/numpy/f32/2048x2048x2048'
+# Default 1024×128×1536 workload, f32 only
+NUMWARS_FILTER='dots/numpy/f32' python dots/bench.py
 ```

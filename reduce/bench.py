@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Reduction benchmarks: NumKong vs NumPy.
 
@@ -11,48 +10,28 @@ Can be run with uv:
 Or with traditional pip:
     pip install -e ".[reduce]"
     python reduce/bench.py
-
-Environment variables:
-    NUMWARS_FILTER - Regex filter for benchmark names
-    NUMWARS_DIMS   - Number of elements for flat-vector ops (default: 1_000_000)
-    NUMWARS_DIMS - Vector dimension and row count (default: 2048)
 """
 
-import argparse
 import json
-import os
-import re
 import sys
-import time
 from dataclasses import dataclass
-from typing import List
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
-import tabulate
+
+from numwars import (
+    Settings,
+    format_duration,
+    measure_average_duration,
+    parse_numpy_dtype,
+    print_results_table,
+    print_settings,
+    read_settings,
+)
 
 try:
     import numkong as nk
 except ImportError:
     print("Error: numkong not found. Install with: pip install numkong")
-    sys.exit(1)
-
-try:
-    from utils import (
-        add_common_args,
-        format_duration,
-        get_batch_size,
-        get_env,
-        get_tensor_dims,
-        measure_average_duration,
-        normalize_dtype_name,
-        parse_numpy_dtype,
-        print_results_table,
-        should_run_benchmark,
-    )
-except ImportError:
-    print("Error: Could not import utils.py. Make sure it's in the parent directory.")
     sys.exit(1)
 
 
@@ -65,7 +44,7 @@ class BenchmarkResult:
     display_signature: str
     elements: int
     duration_secs: float
-    throughput_gbs: float
+    throughput_gibs: float
 
 
 def dtype_itemsize(dtype_name: str) -> int:
@@ -92,46 +71,40 @@ def display_signature_name(input_dtype: str, output_dtype: str) -> str:
     return f"{input_dtype} \u2192 {output_dtype}"
 
 
-def build_vector(elements: int, dtype_str: str, seed: int) -> np.ndarray:
-    rng = np.random.default_rng(seed)
+def build_vector(elements: int, dtype_str: str, rng: np.random.Generator) -> np.ndarray:
     dtype = parse_numpy_dtype(dtype_str)
-    if dtype_str.startswith("i") or dtype_str.startswith("u"):
+    if dtype_str.startswith(("i", "u")):
         info = np.iinfo(dtype)
         return rng.integers(info.min, info.max, size=elements, dtype=dtype)
     data = rng.uniform(-1.0, 1.0, size=elements).astype(np.float32)
     return data.astype(dtype)
 
 
-def build_matrix(batch_size: int, ndim: int, dtype_str: str, seed: int) -> np.ndarray:
-    rng = np.random.default_rng(seed)
+def build_matrix(batch_size: int, ndim: int, dtype_str: str, rng: np.random.Generator) -> np.ndarray:
     dtype = parse_numpy_dtype(dtype_str)
     data = rng.uniform(-1.0, 1.0, size=(batch_size, ndim)).astype(np.float32)
     return data.astype(dtype)
 
 
-def benchmark_numpy(
-    op: str, elements: int, dtype_str: str, warmup: float, profile: float, seed: int
-) -> BenchmarkResult:
+def benchmark_numpy(op: str, dtype_str: str, settings: Settings) -> BenchmarkResult:
+    rng = np.random.default_rng(settings.seed)
     if op == "norm":
-        batch_size = get_batch_size()
-        ndim = elements // batch_size
-        if ndim < 1:
-            ndim = 1
+        batch_size, ndim = settings.batch_size, settings.dims
         actual_elements = batch_size * ndim
-        matrix = build_matrix(batch_size, ndim, dtype_str, seed)
+        matrix = build_matrix(batch_size, ndim, dtype_str, rng)
         func = lambda: np.linalg.norm(matrix, axis=1)
         bytes_processed = actual_elements * matrix.itemsize
     else:
-        actual_elements = elements
-        x = build_vector(elements, dtype_str, seed)
+        actual_elements = settings.batch_size
+        x = build_vector(actual_elements, dtype_str, rng)
         if op == "sum":
             func = lambda: np.sum(x)
         else:
             raise ValueError(f"Unknown operation: {op}")
         bytes_processed = actual_elements * x.itemsize
 
-    duration = measure_average_duration(func, warmup, profile)
-    throughput_gbs = bytes_processed / duration / 1e9 if duration > 0 else 0.0
+    duration = measure_average_duration(func, settings)
+    throughput_gibs = bytes_processed / duration / 2**30 if duration > 0 else 0.0
     output_dtype = dtype_str
     if op == "norm":
         output_dtype = "f64"
@@ -144,26 +117,22 @@ def benchmark_numpy(
         display_signature=display_signature_name(dtype_str, output_dtype),
         elements=actual_elements,
         duration_secs=duration,
-        throughput_gbs=throughput_gbs,
+        throughput_gibs=throughput_gibs,
     )
 
 
-def benchmark_numkong(
-    op: str, elements: int, dtype_str: str, warmup: float, profile: float, seed: int
-) -> BenchmarkResult:
+def benchmark_numkong(op: str, dtype_str: str, settings: Settings) -> BenchmarkResult:
+    rng = np.random.default_rng(settings.seed)
     if op == "norm":
-        batch_size = get_batch_size()
-        ndim = elements // batch_size
-        if ndim < 1:
-            ndim = 1
+        batch_size, ndim = settings.batch_size, settings.dims
         actual_elements = batch_size * ndim
-        matrix = build_matrix(batch_size, ndim, dtype_str, seed)
+        matrix = build_matrix(batch_size, ndim, dtype_str, rng)
         t = nk.Tensor(matrix)
         func = lambda: nk.norm(t, axis=1)
         bytes_processed = actual_elements * matrix.itemsize
     else:
-        actual_elements = elements
-        x = build_vector(elements, dtype_str, seed)
+        actual_elements = settings.batch_size
+        x = build_vector(actual_elements, dtype_str, rng)
         if op == "sum":
             t = nk.Tensor(x)
             func = lambda: nk.sum(t)
@@ -171,8 +140,8 @@ def benchmark_numkong(
             raise ValueError(f"Unknown operation: {op}")
         bytes_processed = actual_elements * x.itemsize
 
-    duration = measure_average_duration(func, warmup, profile)
-    throughput_gbs = bytes_processed / duration / 1e9 if duration > 0 else 0.0
+    duration = measure_average_duration(func, settings)
+    throughput_gibs = bytes_processed / duration / 2**30 if duration > 0 else 0.0
     output_dtype = dtype_str
     if op == "norm":
         output_dtype = "f64"
@@ -185,7 +154,7 @@ def benchmark_numkong(
         display_signature=display_signature_name(dtype_str, output_dtype),
         elements=actual_elements,
         duration_secs=duration,
-        throughput_gbs=throughput_gbs,
+        throughput_gibs=throughput_gibs,
     )
 
 
@@ -202,39 +171,21 @@ def result_to_entry(result: BenchmarkResult) -> dict:
         "display_dtype": result.display_signature,
         "display_signature": result.display_signature,
         "elements": result.elements,
-        "primary_value": result.throughput_gbs,
+        "primary_value": result.throughput_gibs,
         "unit": "GB/s",
-        "throughput_gbs": result.throughput_gbs,
+        "throughput_gibs": result.throughput_gibs,
         "duration_secs": result.duration_secs,
     }
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Benchmark vector reduction operations",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    add_common_args(parser)
-    parser.add_argument(
-        "--output-format",
-        choices=["table", "json"],
-        default="table",
-        help="Choose human-readable table output or machine-readable JSON (default: table).",
-    )
-    args = parser.parse_args()
-
-    elements = get_tensor_dims()
-
-    filter_pattern = None
-    if args.filter:
-        try:
-            filter_pattern = re.compile(args.filter)
-        except re.error as e:
-            print(f"Warning: Invalid regex pattern '{args.filter}': {e}")
+    settings = read_settings()
+    if settings.output == "table":
+        print_settings(settings)
 
     metadata = {
-        "elements": elements,
-        "batch_size": get_batch_size(),
+        "batch_size": settings.batch_size,
+        "dims": settings.dims,
         "numkong_version": getattr(nk, "__version__", None),
         "numpy_version": np.__version__,
     }
@@ -256,31 +207,23 @@ def main():
         ("numkong", "norm", "bf16"),
     ]
 
-    all_results: List[BenchmarkResult] = []
+    all_results: list[BenchmarkResult] = []
     for library_slug, op, dtype in candidates:
         benchmark_name = f"reduce/{op}/{library_slug}/{dtype}"
-        if not should_run_benchmark(benchmark_name, filter_pattern):
+        if not settings.selects(benchmark_name):
             continue
-        if args.output_format == "table":
+        if settings.output == "table":
             print(f"Benchmarking {benchmark_name}")
         try:
             if library_slug == "numkong":
-                all_results.append(
-                    benchmark_numkong(
-                        op, elements, dtype, args.warmup, args.time_limit, args.seed
-                    )
-                )
+                all_results.append(benchmark_numkong(op, dtype, settings))
             else:
-                all_results.append(
-                    benchmark_numpy(
-                        op, elements, dtype, args.warmup, args.time_limit, args.seed
-                    )
-                )
-        except Exception as e:
-            if args.output_format == "table":
+                all_results.append(benchmark_numpy(op, dtype, settings))
+        except (AttributeError, KeyError, TypeError, ValueError) as e:
+            if settings.output == "table":
                 print(f"  Skipped: {e}")
 
-    if args.output_format == "json":
+    if settings.output == "json":
         print(
             json.dumps(
                 {
@@ -297,14 +240,14 @@ def main():
         print("No benchmarks were run.")
         return
 
-    print(f"\nReduction benchmarks: {elements:,} elements")
+    print(f"\nReduction benchmarks: {settings.batch_size:,} elements, or rows of {settings.dims}")
     print()
     table_rows = [
         {
             "Library": result.library,
             "Operation": result.operation,
             "Precision": result.display_signature,
-            "GB/s": f"{result.throughput_gbs:.2f}",
+            "GB/s": f"{result.throughput_gibs:.2f}",
             "Time": format_duration(result.duration_secs),
         }
         for result in all_results

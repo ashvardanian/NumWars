@@ -40,7 +40,7 @@ Batch geodesic distance benchmarks comparing NumKong against the geo and geopy l
 cargo bench --bench bench_geospatial --features bench_geospatial
 
 # Smaller 256 coordinate pairs
-NUMWARS_DIMS=256 \
+NUMWARS_BATCH_PER_CORE=256 \
 cargo bench --bench bench_geospatial --features bench_geospatial
 
 # Focus on one metric
@@ -52,5 +52,5 @@ cargo bench --bench bench_geospatial --features bench_geospatial
 
 ```bash
 # Run the Python suite
-uv run --with numkong,numpy,geopy,tabulate python geospatial/bench.py --count 2048
+uv run --with numkong,numpy,geopy,tabulate python geospatial/bench.py
 ```

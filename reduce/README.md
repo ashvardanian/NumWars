@@ -7,55 +7,55 @@ Horizontal sum and row-norm benchmarks comparing NumKong against Polars, ndarray
 | Library                     | Precision    |       GB/s |
 | :-------------------------- | :----------- | ---------: |
 | ___Sum___                   |              |            |
-| `polars::ChunkedArray::sum` | _f64 → f64_  | __113.57__ |
-| `polars::ChunkedArray::sum` | _f32 → f32_  | __110.70__ |
-| `ndarray::sum`              | _f64 → f64_  |      99.49 |
-| `ndarray::sum`              | _f32 → f32_  |      49.83 |
-| `numkong::reduce_moments`   | _bf16 → f64_ |  __33.17__ |
-| `numkong::reduce_moments`   | _u8 → u64_   |  __24.24__ |
-| serial code                 | _u8 → u64_   |      22.96 |
-| `numkong::reduce_moments`   | _f64 → f64_  |      18.26 |
-| `numkong::reduce_moments`   | _f32 → f64_  |  __10.31__ |
-| serial code                 | _f32 → f32_  |       8.50 |
+| `polars::ChunkedArray::sum` | _f64 → f64_  | __105.77__ |
+| `polars::ChunkedArray::sum` | _f32 → f32_  | __103.10__ |
+| `ndarray::sum`              | _f64 → f64_  |      92.66 |
+| `ndarray::sum`              | _f32 → f32_  |      46.41 |
+| `numkong::reduce_moments`   | _bf16 → f64_ |  __30.89__ |
+| `numkong::reduce_moments`   | _u8 → u64_   |  __22.58__ |
+| serial code                 | _u8 → u64_   |      21.38 |
+| `numkong::reduce_moments`   | _f64 → f64_  |      17.01 |
+| `numkong::reduce_moments`   | _f32 → f64_  |  __9.602__ |
+| serial code                 | _f32 → f32_  |       7.92 |
 | ___Row Norms___             |              |            |
-| `ndarray::dot`              | _f64 → f64_  |  __89.72__ |
-| `ndarray::dot`              | _f32 → f32_  |  __53.24__ |
-| `numkong::Dot`              | _bf16 → f32_ |  __30.64__ |
-| `numkong::Dot`              | _f64 → f64_  |      23.44 |
-| serial code                 | _f64 → f64_  |      17.95 |
-| `numkong::Dot`              | _f16 → f32_  |  __12.93__ |
-| `numkong::Dot`              | _f32 → f32_  |      10.60 |
-| serial code                 | _f32 → f32_  |       9.20 |
+| `ndarray::dot`              | _f64 → f64_  |  __83.56__ |
+| `ndarray::dot`              | _f32 → f32_  |  __49.58__ |
+| `numkong::Dot`              | _bf16 → f32_ |  __28.54__ |
+| `numkong::Dot`              | _f64 → f64_  |      21.83 |
+| serial code                 | _f64 → f64_  |      16.72 |
+| `numkong::Dot`              | _f16 → f32_  |  __12.04__ |
+| `numkong::Dot`              | _f32 → f32_  |      9.872 |
+| serial code                 | _f32 → f32_  |       8.57 |
 
 ## Python
 
 | Library             | Precision   |      GB/s |
 | :------------------ | :---------- | --------: |
 | ___Sum___           |             |           |
-| `numpy.sum`         | _f64 → f64_ |     61.26 |
-| `numpy.sum`         | _f32 → f32_ |     33.92 |
-| `numkong.sum`       | _u8 → u8_   | __21.78__ |
-| `numkong.sum`       | _i8 → i8_   | __21.40__ |
-| `numkong.sum`       | _f64 → f64_ | __16.34__ |
-| `numkong.sum`       | _f32 → f32_ |  __9.49__ |
-| `numpy.sum`         | _u8 → u8_   |      7.01 |
-| `numpy.sum`         | _i8 → i8_   |      6.73 |
+| `numpy.sum`         | _f64 → f64_ |     57.05 |
+| `numpy.sum`         | _f32 → f32_ |     31.59 |
+| `numkong.sum`       | _u8 → u8_   | __20.28__ |
+| `numkong.sum`       | _i8 → i8_   | __19.93__ |
+| `numkong.sum`       | _f64 → f64_ | __15.22__ |
+| `numkong.sum`       | _f32 → f32_ |  __8.84__ |
+| `numpy.sum`         | _u8 → u8_   |      6.53 |
+| `numpy.sum`         | _i8 → i8_   |      6.27 |
 | ___Norm___          |             |           |
-| `numpy.linalg.norm` | _f64 → f64_ |     30.26 |
-| `numpy.linalg.norm` | _f32 → f64_ |     20.15 |
-| `numkong.norm`      | _f64 → f64_ | __17.44__ |
-| `numkong.norm`      | _f32 → f64_ | __15.10__ |
+| `numpy.linalg.norm` | _f64 → f64_ |     28.18 |
+| `numpy.linalg.norm` | _f32 → f64_ |     18.77 |
+| `numkong.norm`      | _f64 → f64_ | __16.24__ |
+| `numkong.norm`      | _f32 → f64_ | __14.06__ |
 
 ## Run It
 
 ### Rust
 
 ```bash
-# Default 1M-element tensors
+# Default 2048-element tensors
 cargo bench --bench bench_reduce --features bench_reduce
 
-# Smaller 10K-element tensors
-NUMWARS_DIMS=10000 \
+# Larger 1M-element tensors
+NUMWARS_BATCH_PER_CORE=1000000 \
 cargo bench --bench bench_reduce --features bench_reduce
 
 # Focus on one operation

@@ -18,30 +18,23 @@
 //! NUMWARS_FILTER="similarity/angular/f32" cargo bench --features bench_similarity  # Specific benchmark
 //! ```
 //!
-//! Environment variables:
-//! - NUMWARS_DIMS: Vector dimensions (default: 2048)
-//! - NUMWARS_FILTER: Regex to filter benchmark names (default: none, runs all)
-//! - NUMWARS_WARMUP_SECONDS: Warmup time in seconds (default: 3.0)
-//! - NUMWARS_PROFILE_SECONDS: Measurement time in seconds (default: 10.0)
-//!
 //! Benchmark naming: similarity/{metric}/{dtype}
 //! Examples: similarity/angular/f32, similarity/dot/f64, similarity/euclidean/i8
 
-#[path = "../utils.rs"]
-mod utils;
+use std::ffi::c_int;
+use std::hint::black_box;
+use std::iter::Sum;
+use std::ops::AddAssign;
 
 use criterion::measurement::WallTime;
-use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion, Throughput};
+use criterion::{BenchmarkGroup, Criterion, Throughput};
 use num_traits::{Float, Num, NumCast};
 use numkong::{
     bf16, capabilities, e2m3, e3m2, e4m3, e5m2, f16, u1x8, Angular, Dot, Euclidean, Hamming, Jaccard, JensenShannon,
     KullbackLeibler,
 };
-use std::hint::black_box;
-use std::iter::Sum;
-use std::ops::AddAssign;
-use std::ffi::c_int;
-use utils::*;
+
+use numwars::{BaselineConvert, Settings};
 
 // region: Baseline Implementations
 
@@ -816,14 +809,15 @@ impl<T: JensenShannon> RunNumKongJensenShannon for T {
 
 // region: Generic Helpers
 
-fn bench_angular_dtype<T>(c: &mut Criterion, dtype: &str, dims: usize, init: T)
+fn bench_angular_dtype<T>(c: &mut Criterion, settings: &Settings, dtype: &str, init: T)
 where
     T: Clone + RunBaselineAngular + RunNumKongAngular + 'static,
 {
     let name = format!("similarity/angular/{dtype}");
-    if !should_run_benchmark(&name) {
+    if !settings.selects(&name) {
         return;
     }
+    let dims = settings.dims;
     let mut group = c.benchmark_group(name);
     group.throughput(Throughput::Bytes((2 * dims * std::mem::size_of::<T>()) as u64));
     let a = vec![init.clone(); dims];
@@ -833,14 +827,15 @@ where
     group.finish();
 }
 
-fn bench_sqeuclidean_dtype<T>(c: &mut Criterion, dtype: &str, dims: usize, init: T)
+fn bench_sqeuclidean_dtype<T>(c: &mut Criterion, settings: &Settings, dtype: &str, init: T)
 where
     T: Clone + RunBaselineSqEuclidean + RunNumKongSqEuclidean + 'static,
 {
     let name = format!("similarity/sqeuclidean/{dtype}");
-    if !should_run_benchmark(&name) {
+    if !settings.selects(&name) {
         return;
     }
+    let dims = settings.dims;
     let mut group = c.benchmark_group(name);
     group.throughput(Throughput::Bytes((2 * dims * std::mem::size_of::<T>()) as u64));
     let a = vec![init.clone(); dims];
@@ -850,14 +845,15 @@ where
     group.finish();
 }
 
-fn bench_euclidean_dtype<T>(c: &mut Criterion, dtype: &str, dims: usize, init: T)
+fn bench_euclidean_dtype<T>(c: &mut Criterion, settings: &Settings, dtype: &str, init: T)
 where
     T: Clone + RunBaselineEuclidean + RunNumKongEuclidean + RunNalgebraEuclidean + RunNdarrayEuclidean + 'static,
 {
     let name = format!("similarity/euclidean/{dtype}");
-    if !should_run_benchmark(&name) {
+    if !settings.selects(&name) {
         return;
     }
+    let dims = settings.dims;
     let mut group = c.benchmark_group(name);
     group.throughput(Throughput::Bytes((2 * dims * std::mem::size_of::<T>()) as u64));
     let extra_init = init.clone();
@@ -870,14 +866,15 @@ where
     group.finish();
 }
 
-fn bench_dot_dtype<T>(c: &mut Criterion, dtype: &str, dims: usize, init: T)
+fn bench_dot_dtype<T>(c: &mut Criterion, settings: &Settings, dtype: &str, init: T)
 where
     T: Clone + RunBaselineDot + RunNumKongDot + RunNalgebraDot + RunNdarrayDot + RunBlasDot + 'static,
 {
     let name = format!("similarity/dot/{dtype}");
-    if !should_run_benchmark(&name) {
+    if !settings.selects(&name) {
         return;
     }
+    let dims = settings.dims;
     let mut group = c.benchmark_group(name);
     group.throughput(Throughput::Bytes((2 * dims * std::mem::size_of::<T>()) as u64));
     let extra_init = init.clone();
@@ -891,14 +888,15 @@ where
     group.finish();
 }
 
-fn bench_kullbackleibler_dtype<T>(c: &mut Criterion, dtype: &str, dims: usize, init: T)
+fn bench_kullbackleibler_dtype<T>(c: &mut Criterion, settings: &Settings, dtype: &str, init: T)
 where
     T: Clone + RunBaselineKullbackLeibler + RunNumKongKullbackLeibler + 'static,
 {
     let name = format!("similarity/kullbackleibler/{dtype}");
-    if !should_run_benchmark(&name) {
+    if !settings.selects(&name) {
         return;
     }
+    let dims = settings.dims;
     let mut group = c.benchmark_group(name);
     group.throughput(Throughput::Bytes((dims * std::mem::size_of::<T>()) as u64));
     let a = vec![init.clone(); dims];
@@ -908,14 +906,15 @@ where
     group.finish();
 }
 
-fn bench_jensenshannon_dtype<T>(c: &mut Criterion, dtype: &str, dims: usize, init: T)
+fn bench_jensenshannon_dtype<T>(c: &mut Criterion, settings: &Settings, dtype: &str, init: T)
 where
     T: Clone + RunBaselineJensenShannon + RunNumKongJensenShannon + 'static,
 {
     let name = format!("similarity/jensenshannon/{dtype}");
-    if !should_run_benchmark(&name) {
+    if !settings.selects(&name) {
         return;
     }
+    let dims = settings.dims;
     let mut group = c.benchmark_group(name);
     group.throughput(Throughput::Bytes((dims * std::mem::size_of::<T>()) as u64));
     let a = vec![init.clone(); dims];
@@ -930,71 +929,65 @@ where
 // region: Benchmarks
 
 /// Benchmark true Euclidean distance
-pub fn bench_euclidean(c: &mut Criterion) {
-    capabilities::configure_thread();
-    let dims = get_vector_dims();
-    bench_euclidean_dtype(c, "f32", dims, 1.0f32);
-    bench_euclidean_dtype(c, "f64", dims, 1.0f64);
-    bench_euclidean_dtype(c, "i8", dims, 1i8);
-    bench_euclidean_dtype(c, "u8", dims, 1u8);
-    bench_euclidean_dtype(c, "f16", dims, f16::from_f32(1.0));
-    bench_euclidean_dtype(c, "bf16", dims, bf16::from_f32(1.0));
-    bench_euclidean_dtype(c, "e4m3", dims, e4m3::from_f32(1.0));
-    bench_euclidean_dtype(c, "e5m2", dims, e5m2::from_f32(1.0));
-    bench_euclidean_dtype(c, "e2m3", dims, e2m3::from_f32(1.0));
-    bench_euclidean_dtype(c, "e3m2", dims, e3m2::from_f32(1.0));
+pub fn bench_euclidean(c: &mut Criterion, settings: &Settings) {
+    bench_euclidean_dtype(c, settings, "f32", 1.0f32);
+    bench_euclidean_dtype(c, settings, "f64", 1.0f64);
+    bench_euclidean_dtype(c, settings, "i8", 1i8);
+    bench_euclidean_dtype(c, settings, "u8", 1u8);
+    bench_euclidean_dtype(c, settings, "f16", f16::from_f32(1.0));
+    bench_euclidean_dtype(c, settings, "bf16", bf16::from_f32(1.0));
+    bench_euclidean_dtype(c, settings, "e4m3", e4m3::from_f32(1.0));
+    bench_euclidean_dtype(c, settings, "e5m2", e5m2::from_f32(1.0));
+    bench_euclidean_dtype(c, settings, "e2m3", e2m3::from_f32(1.0));
+    bench_euclidean_dtype(c, settings, "e3m2", e3m2::from_f32(1.0));
 }
 
 /// Benchmark squared Euclidean distance
-pub fn bench_sqeuclidean(c: &mut Criterion) {
-    let dims = get_vector_dims();
-    bench_sqeuclidean_dtype(c, "f32", dims, 1.0f32);
-    bench_sqeuclidean_dtype(c, "f64", dims, 1.0f64);
-    bench_sqeuclidean_dtype(c, "i8", dims, 1i8);
-    bench_sqeuclidean_dtype(c, "u8", dims, 1u8);
-    bench_sqeuclidean_dtype(c, "f16", dims, f16::from_f32(1.0));
-    bench_sqeuclidean_dtype(c, "bf16", dims, bf16::from_f32(1.0));
-    bench_sqeuclidean_dtype(c, "e4m3", dims, e4m3::from_f32(1.0));
-    bench_sqeuclidean_dtype(c, "e5m2", dims, e5m2::from_f32(1.0));
-    bench_sqeuclidean_dtype(c, "e2m3", dims, e2m3::from_f32(1.0));
-    bench_sqeuclidean_dtype(c, "e3m2", dims, e3m2::from_f32(1.0));
+pub fn bench_sqeuclidean(c: &mut Criterion, settings: &Settings) {
+    bench_sqeuclidean_dtype(c, settings, "f32", 1.0f32);
+    bench_sqeuclidean_dtype(c, settings, "f64", 1.0f64);
+    bench_sqeuclidean_dtype(c, settings, "i8", 1i8);
+    bench_sqeuclidean_dtype(c, settings, "u8", 1u8);
+    bench_sqeuclidean_dtype(c, settings, "f16", f16::from_f32(1.0));
+    bench_sqeuclidean_dtype(c, settings, "bf16", bf16::from_f32(1.0));
+    bench_sqeuclidean_dtype(c, settings, "e4m3", e4m3::from_f32(1.0));
+    bench_sqeuclidean_dtype(c, settings, "e5m2", e5m2::from_f32(1.0));
+    bench_sqeuclidean_dtype(c, settings, "e2m3", e2m3::from_f32(1.0));
+    bench_sqeuclidean_dtype(c, settings, "e3m2", e3m2::from_f32(1.0));
 }
 
 /// Benchmark angular distance
-pub fn bench_angular(c: &mut Criterion) {
-    let dims = get_vector_dims();
-    bench_angular_dtype(c, "f32", dims, 1.0f32);
-    bench_angular_dtype(c, "f64", dims, 1.0f64);
-    bench_angular_dtype(c, "i8", dims, 1i8);
-    bench_angular_dtype(c, "u8", dims, 1u8);
-    bench_angular_dtype(c, "f16", dims, f16::from_f32(1.0));
-    bench_angular_dtype(c, "bf16", dims, bf16::from_f32(1.0));
-    bench_angular_dtype(c, "e4m3", dims, e4m3::from_f32(1.0));
-    bench_angular_dtype(c, "e5m2", dims, e5m2::from_f32(1.0));
-    bench_angular_dtype(c, "e2m3", dims, e2m3::from_f32(1.0));
-    bench_angular_dtype(c, "e3m2", dims, e3m2::from_f32(1.0));
+pub fn bench_angular(c: &mut Criterion, settings: &Settings) {
+    bench_angular_dtype(c, settings, "f32", 1.0f32);
+    bench_angular_dtype(c, settings, "f64", 1.0f64);
+    bench_angular_dtype(c, settings, "i8", 1i8);
+    bench_angular_dtype(c, settings, "u8", 1u8);
+    bench_angular_dtype(c, settings, "f16", f16::from_f32(1.0));
+    bench_angular_dtype(c, settings, "bf16", bf16::from_f32(1.0));
+    bench_angular_dtype(c, settings, "e4m3", e4m3::from_f32(1.0));
+    bench_angular_dtype(c, settings, "e5m2", e5m2::from_f32(1.0));
+    bench_angular_dtype(c, settings, "e2m3", e2m3::from_f32(1.0));
+    bench_angular_dtype(c, settings, "e3m2", e3m2::from_f32(1.0));
 }
 
 /// Benchmark dot product
-pub fn bench_dot(c: &mut Criterion) {
-    let dims = get_vector_dims();
-    bench_dot_dtype(c, "f32", dims, 1.0f32);
-    bench_dot_dtype(c, "f64", dims, 1.0f64);
-    bench_dot_dtype(c, "i8", dims, 1i8);
-    bench_dot_dtype(c, "u8", dims, 1u8);
-    bench_dot_dtype(c, "f16", dims, f16::from_f32(1.0));
-    bench_dot_dtype(c, "bf16", dims, bf16::from_f32(1.0));
-    bench_dot_dtype(c, "e4m3", dims, e4m3::from_f32(1.0));
-    bench_dot_dtype(c, "e5m2", dims, e5m2::from_f32(1.0));
-    bench_dot_dtype(c, "e2m3", dims, e2m3::from_f32(1.0));
-    bench_dot_dtype(c, "e3m2", dims, e3m2::from_f32(1.0));
+pub fn bench_dot(c: &mut Criterion, settings: &Settings) {
+    bench_dot_dtype(c, settings, "f32", 1.0f32);
+    bench_dot_dtype(c, settings, "f64", 1.0f64);
+    bench_dot_dtype(c, settings, "i8", 1i8);
+    bench_dot_dtype(c, settings, "u8", 1u8);
+    bench_dot_dtype(c, settings, "f16", f16::from_f32(1.0));
+    bench_dot_dtype(c, settings, "bf16", bf16::from_f32(1.0));
+    bench_dot_dtype(c, settings, "e4m3", e4m3::from_f32(1.0));
+    bench_dot_dtype(c, settings, "e5m2", e5m2::from_f32(1.0));
+    bench_dot_dtype(c, settings, "e2m3", e2m3::from_f32(1.0));
+    bench_dot_dtype(c, settings, "e3m2", e3m2::from_f32(1.0));
 }
 
 /// Benchmark Hamming distance
-pub fn bench_hamming(c: &mut Criterion) {
-    let dims = get_vector_dims();
-    let byte_count = dims.div_ceil(8);
-    if should_run_benchmark("similarity/hamming/u1x8") {
+pub fn bench_hamming(c: &mut Criterion, settings: &Settings) {
+    let byte_count = settings.dims.div_ceil(8);
+    if settings.selects("similarity/hamming/u1x8") {
         let mut group = c.benchmark_group("similarity/hamming/u1x8");
         let vector_a = vec![u1x8::new(0xAA); byte_count];
         let vector_b = vec![u1x8::new(0x55); byte_count];
@@ -1010,10 +1003,9 @@ pub fn bench_hamming(c: &mut Criterion) {
 }
 
 /// Benchmark Jaccard distance
-pub fn bench_jaccard(c: &mut Criterion) {
-    let dims = get_vector_dims();
-    let byte_count = dims.div_ceil(8);
-    if should_run_benchmark("similarity/jaccard/u1x8") {
+pub fn bench_jaccard(c: &mut Criterion, settings: &Settings) {
+    let byte_count = settings.dims.div_ceil(8);
+    if settings.selects("similarity/jaccard/u1x8") {
         let mut group = c.benchmark_group("similarity/jaccard/u1x8");
         let vector_a = vec![u1x8::new(0xAA); byte_count];
         let vector_b = vec![u1x8::new(0x55); byte_count];
@@ -1029,17 +1021,15 @@ pub fn bench_jaccard(c: &mut Criterion) {
 }
 
 /// Benchmark Kullback-Leibler divergence
-pub fn bench_kullbackleibler(c: &mut Criterion) {
-    let dims = get_vector_dims();
-    bench_kullbackleibler_dtype(c, "f32", dims, 1.0f32);
-    bench_kullbackleibler_dtype(c, "f64", dims, 1.0f64);
+pub fn bench_kullbackleibler(c: &mut Criterion, settings: &Settings) {
+    bench_kullbackleibler_dtype(c, settings, "f32", 1.0f32);
+    bench_kullbackleibler_dtype(c, settings, "f64", 1.0f64);
 }
 
 /// Benchmark Jensen-Shannon divergence
-pub fn bench_jensenshannon(c: &mut Criterion) {
-    let dims = get_vector_dims();
-    bench_jensenshannon_dtype(c, "f32", dims, 1.0f32);
-    bench_jensenshannon_dtype(c, "f64", dims, 1.0f64);
+pub fn bench_jensenshannon(c: &mut Criterion, settings: &Settings) {
+    bench_jensenshannon_dtype(c, settings, "f32", 1.0f32);
+    bench_jensenshannon_dtype(c, settings, "f64", 1.0f64);
 }
 
 // endregion
@@ -1147,13 +1137,19 @@ mod tests {
 
 // region: Main
 
-criterion_group! {
-    name = benches;
-    config = utils::configure_criterion();
-    targets = bench_dot, bench_angular, bench_euclidean, bench_sqeuclidean,
-              bench_hamming, bench_jaccard,
-              bench_kullbackleibler, bench_jensenshannon
+fn main() {
+    let settings = Settings::read();
+    capabilities::configure_thread();
+    let mut criterion = numwars::configure_criterion(&settings);
+    bench_dot(&mut criterion, &settings);
+    bench_angular(&mut criterion, &settings);
+    bench_euclidean(&mut criterion, &settings);
+    bench_sqeuclidean(&mut criterion, &settings);
+    bench_hamming(&mut criterion, &settings);
+    bench_jaccard(&mut criterion, &settings);
+    bench_kullbackleibler(&mut criterion, &settings);
+    bench_jensenshannon(&mut criterion, &settings);
+    criterion.final_summary();
 }
-criterion_main!(benches);
 
 // endregion

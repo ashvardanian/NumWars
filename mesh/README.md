@@ -45,10 +45,10 @@
 python mesh/bench.py
 
 # Smaller 256-point clouds
-python mesh/bench.py --count 256
+NUMWARS_BATCH_PER_CORE=256 python mesh/bench.py
 
 # Focus on one operation
-python mesh/bench.py -k "kabsch"
+NUMWARS_FILTER="kabsch" python mesh/bench.py
 ```
 
 ## Run It (Rust)
@@ -58,7 +58,7 @@ python mesh/bench.py -k "kabsch"
 cargo bench --bench bench_mesh --features bench_mesh
 
 # Smaller 256-point clouds
-NUMWARS_DIMS=256 cargo bench --bench bench_mesh --features bench_mesh
+NUMWARS_BATCH_PER_CORE=256 cargo bench --bench bench_mesh --features bench_mesh
 
 # Focus on one operation
 NUMWARS_FILTER="mesh/rmsd/f32" \

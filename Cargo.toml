@@ -7,15 +7,19 @@ keywords = ["benchmark", "simd", "numerical", "performance"]
 license = "Apache-2.0"
 name = "numwars"
 repository = "https://github.com/ashvardanian/NumWars"
-rust-version = "1.75.0"
+rust-version = "1.76.0"
 version = "0.1.0"
+
+[lib]
+bench = false
+name = "numwars"
+path = "numwars.rs"
 
 [dependencies]
 criterion = {version = "0.8", default-features = false}
 forkunion = {version = "3.0", optional = true}
 half = {version = "2.4", optional = true}
 num-traits = {version = "0.2", optional = true}
-num_cpus = "1.16"
 numkong = {version = "7.7.1", default-features = false}
 rand = {version = "0.10", optional = true}
 regex = "1.11"

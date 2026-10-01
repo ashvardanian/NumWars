@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Geospatial distance benchmarks: NumKong vs Python alternatives.
 
@@ -15,38 +14,28 @@ Or with traditional pip:
     python geospatial/bench.py
 """
 
-import argparse
 import json
 import math
-import os
-import re
 import sys
-import time
 from dataclasses import dataclass
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 import numpy as np
-import tabulate
 from geopy.distance import geodesic, great_circle
+
+from numwars import (
+    Settings,
+    calculate_mps,
+    measure_average_duration,
+    normalize_dtype_name,
+    print_results_table,
+    print_settings,
+    read_settings,
+)
 
 try:
     import numkong as nk
 except ImportError:
     print("Error: numkong not found. Install with: pip install numkong")
-    sys.exit(1)
-
-try:
-    from utils import (
-        add_common_args,
-        calculate_mps,
-        measure_average_duration,
-        normalize_dtype_name,
-        print_results_table,
-        should_run_benchmark,
-    )
-except ImportError:
-    print("Error: Could not import utils.py. Make sure it's in the parent directory.")
     sys.exit(1)
 
 
@@ -64,9 +53,7 @@ class BenchmarkResult:
     primary_value: float
 
 
-def build_coords(
-    count: int, seed: int, dtype=np.float32
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def build_coords(count: int, seed: int, dtype=np.float32) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     rng = np.random.default_rng(seed)
     a_lats = rng.uniform(-90.0, 90.0, size=count).astype(dtype)
     a_lons = rng.uniform(-180.0, 180.0, size=count).astype(dtype)
@@ -75,16 +62,13 @@ def build_coords(
     return a_lats, a_lons, b_lats, b_lons
 
 
-def baseline_haversine(
-    latitude_a: float, longitude_a: float, latitude_b: float, longitude_b: float
-) -> float:
+def baseline_haversine(latitude_a: float, longitude_a: float, latitude_b: float, longitude_b: float) -> float:
     lat_a = math.radians(latitude_a)
     lat_b = math.radians(latitude_b)
     delta_lat = math.radians(latitude_b - latitude_a)
     delta_lon = math.radians(longitude_b - longitude_a)
     half_chord_squared = (
-        math.sin(delta_lat / 2.0) ** 2
-        + math.cos(lat_a) * math.cos(lat_b) * math.sin(delta_lon / 2.0) ** 2
+        math.sin(delta_lat / 2.0) ** 2 + math.cos(lat_a) * math.cos(lat_b) * math.sin(delta_lon / 2.0) ** 2
     )
     return EARTH_RADIUS_KM * 2.0 * math.asin(math.sqrt(half_chord_squared))
 
@@ -116,10 +100,7 @@ def baseline_vincenty(lat1: float, lon1: float, lat2: float, lon2: float) -> flo
     for _ in range(200):
         sin_lambda = math.sin(lam)
         cos_lambda = math.cos(lam)
-        sin_sigma = math.sqrt(
-            (cos_u2 * sin_lambda) ** 2
-            + (cos_u1 * sin_u2 - sin_u1 * cos_u2 * cos_lambda) ** 2
-        )
+        sin_sigma = math.sqrt((cos_u2 * sin_lambda) ** 2 + (cos_u1 * sin_u2 - sin_u1 * cos_u2 * cos_lambda) ** 2)
         if sin_sigma == 0.0:
             return 0.0
 
@@ -127,30 +108,18 @@ def baseline_vincenty(lat1: float, lon1: float, lat2: float, lon2: float) -> flo
         sigma = math.atan2(sin_sigma, cos_sigma)
         sin_alpha = cos_u1 * cos_u2 * sin_lambda / sin_sigma
         cos_sq_alpha = 1.0 - sin_alpha * sin_alpha
-        cos_2sigma_m = (
-            cos_sigma - 2.0 * sin_u1 * sin_u2 / cos_sq_alpha
-            if cos_sq_alpha != 0.0
-            else 0.0
-        )
+        cos_2sigma_m = cos_sigma - 2.0 * sin_u1 * sin_u2 / cos_sq_alpha if cos_sq_alpha != 0.0 else 0.0
 
         c = f / 16.0 * cos_sq_alpha * (4.0 + f * (4.0 - 3.0 * cos_sq_alpha))
         lam_prev = lam
         lam = l + (1.0 - c) * f * sin_alpha * (
-            sigma
-            + c
-            * sin_sigma
-            * (
-                cos_2sigma_m
-                + c * cos_sigma * (-1.0 + 2.0 * cos_2sigma_m * cos_2sigma_m)
-            )
+            sigma + c * sin_sigma * (cos_2sigma_m + c * cos_sigma * (-1.0 + 2.0 * cos_2sigma_m * cos_2sigma_m))
         )
         if abs(lam - lam_prev) < 1e-12:
             break
 
     u_sq = cos_sq_alpha * (a * a - b * b) / (b * b)
-    cap_a = 1.0 + u_sq / 16384.0 * (
-        4096.0 + u_sq * (-768.0 + u_sq * (320.0 - 175.0 * u_sq))
-    )
+    cap_a = 1.0 + u_sq / 16384.0 * (4096.0 + u_sq * (-768.0 + u_sq * (320.0 - 175.0 * u_sq)))
     cap_b = u_sq / 1024.0 * (256.0 + u_sq * (-128.0 + u_sq * (74.0 - 47.0 * u_sq)))
     delta_sigma = (
         cap_b
@@ -179,8 +148,7 @@ def benchmark_numkong(
     a_lons: np.ndarray,
     b_lats: np.ndarray,
     b_lons: np.ndarray,
-    warmup: float,
-    profile: float,
+    settings: Settings,
 ) -> BenchmarkResult:
     input_dtype = normalize_dtype_name(a_lats.dtype)
     sample_output = func(a_lats, a_lons, b_lats, b_lons)
@@ -188,8 +156,7 @@ def benchmark_numkong(
     out = np.empty(a_lats.shape[0], dtype=a_lats.dtype)
     duration = measure_average_duration(
         lambda: func(a_lats, a_lons, b_lats, b_lons, out=out),
-        warmup,
-        profile,
+        settings,
     )
     return BenchmarkResult(
         workload=workload,
@@ -209,8 +176,7 @@ def benchmark_serial(
     a_lons: np.ndarray,
     b_lats: np.ndarray,
     b_lons: np.ndarray,
-    warmup: float,
-    profile: float,
+    settings: Settings,
 ) -> BenchmarkResult:
     out = np.empty(a_lats.shape[0], dtype=np.float64)
 
@@ -223,7 +189,7 @@ def benchmark_serial(
                 float(b_lons[index]),
             )
 
-    duration = measure_average_duration(run_once, warmup, profile)
+    duration = measure_average_duration(run_once, settings)
     return BenchmarkResult(
         workload=workload,
         library="Serial",
@@ -242,21 +208,16 @@ def benchmark_geopy(
     a_lons: np.ndarray,
     b_lats: np.ndarray,
     b_lons: np.ndarray,
-    warmup: float,
-    profile: float,
+    settings: Settings,
 ) -> BenchmarkResult:
-    pairs = list(
-        zip(
-            zip(a_lats.tolist(), a_lons.tolist()), zip(b_lats.tolist(), b_lons.tolist())
-        )
-    )
+    pairs = list(zip(zip(a_lats.tolist(), a_lons.tolist()), zip(b_lats.tolist(), b_lons.tolist())))
     out = np.empty(len(pairs), dtype=np.float64)
 
     def run_once() -> None:
         for index, (point_a, point_b) in enumerate(pairs):
             out[index] = func(point_a, point_b).km
 
-    duration = measure_average_duration(run_once, warmup, profile)
+    duration = measure_average_duration(run_once, settings)
     return BenchmarkResult(
         workload=workload,
         library="geopy",
@@ -286,36 +247,13 @@ def result_to_entry(result: BenchmarkResult) -> dict:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Benchmark geospatial distance kernels"
-    )
-    add_common_args(parser)
-    parser.add_argument(
-        "--output-format",
-        choices=["table", "json"],
-        default="table",
-        help="Choose human-readable table output or machine-readable JSON (default: table).",
-    )
-    parser.add_argument(
-        "--count",
-        type=int,
-        default=int(os.environ.get("NUMWARS_DIMS", "2048")),
-        help="Number of coordinate pairs to benchmark (default: NUMWARS_DIMS or 2048).",
-    )
-    args = parser.parse_args()
+    settings = read_settings()
+    if settings.output == "table":
+        print_settings(settings)
+    count = settings.batch_size
 
-    filter_pattern = None
-    if args.filter:
-        try:
-            filter_pattern = re.compile(args.filter)
-        except re.error as exc:
-            print(f"Invalid filter regex: {exc}", file=sys.stderr)
-            sys.exit(2)
-
-    a_lats, a_lons, b_lats, b_lons = build_coords(args.count, args.seed)
-    a_lats64, a_lons64, b_lats64, b_lons64 = build_coords(
-        args.count, args.seed, dtype=np.float64
-    )
+    a_lats, a_lons, b_lats, b_lons = build_coords(count, settings.seed)
+    a_lats64, a_lons64, b_lats64, b_lons64 = build_coords(count, settings.seed, dtype=np.float64)
     benchmarks = [
         (
             "geospatial/haversine/numkong/f32",
@@ -326,8 +264,7 @@ def main() -> None:
                 a_lons,
                 b_lats,
                 b_lons,
-                args.warmup,
-                args.time_limit,
+                settings,
             ),
         ),
         (
@@ -339,8 +276,7 @@ def main() -> None:
                 a_lons64,
                 b_lats64,
                 b_lons64,
-                args.warmup,
-                args.time_limit,
+                settings,
             ),
         ),
         (
@@ -352,8 +288,7 @@ def main() -> None:
                 a_lons,
                 b_lats,
                 b_lons,
-                args.warmup,
-                args.time_limit,
+                settings,
             ),
         ),
         (
@@ -365,8 +300,7 @@ def main() -> None:
                 a_lons64,
                 b_lats64,
                 b_lons64,
-                args.warmup,
-                args.time_limit,
+                settings,
             ),
         ),
         (
@@ -378,8 +312,7 @@ def main() -> None:
                 a_lons64,
                 b_lats64,
                 b_lons64,
-                args.warmup,
-                args.time_limit,
+                settings,
             ),
         ),
         (
@@ -391,8 +324,7 @@ def main() -> None:
                 a_lons,
                 b_lats,
                 b_lons,
-                args.warmup,
-                args.time_limit,
+                settings,
             ),
         ),
         (
@@ -404,8 +336,7 @@ def main() -> None:
                 a_lons64,
                 b_lats64,
                 b_lons64,
-                args.warmup,
-                args.time_limit,
+                settings,
             ),
         ),
         (
@@ -417,8 +348,7 @@ def main() -> None:
                 a_lons,
                 b_lats,
                 b_lons,
-                args.warmup,
-                args.time_limit,
+                settings,
             ),
         ),
         (
@@ -430,8 +360,7 @@ def main() -> None:
                 a_lons64,
                 b_lats64,
                 b_lons64,
-                args.warmup,
-                args.time_limit,
+                settings,
             ),
         ),
         (
@@ -443,19 +372,18 @@ def main() -> None:
                 a_lons64,
                 b_lats64,
                 b_lons64,
-                args.warmup,
-                args.time_limit,
+                settings,
             ),
         ),
     ]
 
     results = []
     for benchmark_id, benchmark_fn in benchmarks:
-        if not should_run_benchmark(benchmark_id, filter_pattern):
+        if not settings.selects(benchmark_id):
             continue
         results.append(result_to_entry(benchmark_fn()))
 
-    if args.output_format == "json":
+    if settings.output == "json":
         json.dump({"results": results}, sys.stdout, indent=2)
         sys.stdout.write("\n")
         return

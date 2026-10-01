@@ -113,7 +113,7 @@ Pairwise vector-vector distance and dot-product benchmarks comparing NumKong aga
 ### Rust
 
 ```bash
-# Default 2048-dimensional vectors
+# Default 1536-dimensional vectors
 cargo bench --bench bench_similarity --features bench_similarity
 
 # Smaller 512-dimensional vectors
@@ -127,9 +127,9 @@ cargo bench --bench bench_similarity --features bench_similarity
 ### Python
 
 ```bash
-# Default 2048-dimensional pairwise distances
-python similarity/bench.py --filter 'angular.*float32'
+# Default 1536-dimensional pairwise distances
+NUMWARS_FILTER='angular/f32' python similarity/bench.py
 
-# Compare probability metrics
-python similarity/bench.py --filter 'jensenshannon|kullback' --ndim 1536 --count 128
+# Shorter vectors
+NUMWARS_DIMS=256 NUMWARS_FILTER='dot' python similarity/bench.py
 ```

@@ -9,25 +9,20 @@
 //! NUMWARS_FILTER="sum" cargo bench --features bench_reduce
 //! ```
 //!
-//! Environment variables:
-//! - NUMWARS_DIMS: Tensor size in elements (default: 1000000)
-//! - NUMWARS_FILTER: Regex to filter benchmark names
-//!
 //! Benchmark naming: reduce/{operation}/{dtype}
 //! Examples: reduce/sum/f32, reduce/row_norms/f64
 
-#[path = "../utils.rs"]
-mod utils;
+use std::hint::black_box;
+use std::iter::Sum;
 
 use criterion::measurement::WallTime;
-use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion, Throughput};
+use criterion::{BenchmarkGroup, Criterion, Throughput};
 use ndarray::{Array1, Array2};
 use num_traits::Float;
 use numkong::{bf16, capabilities, f16, Dot, FloatLike, ReduceMoments};
 use polars::prelude::*;
-use std::hint::black_box;
-use std::iter::Sum;
-use utils::*;
+
+use numwars::Settings;
 
 // region: Operation Model
 
@@ -182,15 +177,16 @@ impl RunPolars for bf16 {}
 
 // region: Generic Helpers
 
-fn bench_reduce_op_dtype<T>(c: &mut Criterion, op: ReduceOp, dtype: &str, size: usize, init: T)
+fn bench_reduce_op_dtype<T>(c: &mut Criterion, settings: &Settings, op: ReduceOp, dtype: &str, init: T)
 where
     T: Clone + RunBaseline + RunNumKong + RunNdarray + RunPolars + 'static,
 {
     let name = format!("reduce/{}/{}", op.slug(), dtype);
-    if !should_run_benchmark(&name) {
+    if !settings.selects(&name) {
         return;
     }
 
+    let size = settings.batch_size();
     let mut group = c.benchmark_group(name);
     group.throughput(Throughput::Bytes((size * std::mem::size_of::<T>()) as u64));
 
@@ -207,13 +203,11 @@ where
 
 // region: Benchmarks
 
-pub fn bench_sum(c: &mut Criterion) {
-    capabilities::configure_thread();
-    let size = get_tensor_dims();
-    bench_reduce_op_dtype(c, ReduceOp::Sum, "f32", size, 1.0f32);
-    bench_reduce_op_dtype(c, ReduceOp::Sum, "f64", size, 1.0f64);
-    bench_reduce_op_dtype(c, ReduceOp::Sum, "u8", size, 1u8);
-    bench_reduce_op_dtype(c, ReduceOp::Sum, "bf16", size, bf16::from_f32(1.0));
+pub fn bench_sum(c: &mut Criterion, settings: &Settings) {
+    bench_reduce_op_dtype(c, settings, ReduceOp::Sum, "f32", 1.0f32);
+    bench_reduce_op_dtype(c, settings, ReduceOp::Sum, "f64", 1.0f64);
+    bench_reduce_op_dtype(c, settings, ReduceOp::Sum, "u8", 1u8);
+    bench_reduce_op_dtype(c, settings, ReduceOp::Sum, "bf16", bf16::from_f32(1.0));
 }
 
 trait RunRowNorms: Clone + 'static {
@@ -347,12 +341,13 @@ impl RunRowNorms for f16 {
     }
 }
 
-fn bench_row_norms_dtype<T: RunRowNorms>(c: &mut Criterion, dtype: &str, batch_size: usize, ndim: usize, init: T) {
+fn bench_row_norms_dtype<T: RunRowNorms>(c: &mut Criterion, settings: &Settings, dtype: &str, init: T) {
     let name = format!("reduce/row_norms/{dtype}");
-    if !should_run_benchmark(&name) {
+    if !settings.selects(&name) {
         return;
     }
 
+    let (batch_size, ndim) = (settings.batch_size(), settings.dims);
     let total_elements = batch_size * ndim;
     let mut group = c.benchmark_group(name);
     group.throughput(Throughput::Bytes((total_elements * std::mem::size_of::<T>()) as u64));
@@ -362,14 +357,11 @@ fn bench_row_norms_dtype<T: RunRowNorms>(c: &mut Criterion, dtype: &str, batch_s
     group.finish();
 }
 
-pub fn bench_row_norms(c: &mut Criterion) {
-    capabilities::configure_thread();
-    let ndim = get_vector_dims();
-    let batch_size = get_vector_dims();
-    bench_row_norms_dtype(c, "f32", batch_size, ndim, 1.0f32);
-    bench_row_norms_dtype(c, "f64", batch_size, ndim, 1.0f64);
-    bench_row_norms_dtype(c, "bf16", batch_size, ndim, bf16::from_f32(1.0));
-    bench_row_norms_dtype(c, "f16", batch_size, ndim, f16::from_f32(1.0));
+pub fn bench_row_norms(c: &mut Criterion, settings: &Settings) {
+    bench_row_norms_dtype(c, settings, "f32", 1.0f32);
+    bench_row_norms_dtype(c, settings, "f64", 1.0f64);
+    bench_row_norms_dtype(c, settings, "bf16", bf16::from_f32(1.0));
+    bench_row_norms_dtype(c, settings, "f16", f16::from_f32(1.0));
 }
 
 // endregion
@@ -402,11 +394,13 @@ mod tests {
 
 // region: Main
 
-criterion_group! {
-    name = benches;
-    config = utils::configure_criterion();
-    targets = bench_sum, bench_row_norms
+fn main() {
+    let settings = Settings::read();
+    capabilities::configure_thread();
+    let mut criterion = numwars::configure_criterion(&settings);
+    bench_sum(&mut criterion, &settings);
+    bench_row_norms(&mut criterion, &settings);
+    criterion.final_summary();
 }
-criterion_main!(benches);
 
 // endregion

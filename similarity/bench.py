@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Pairwise similarity benchmarks: NumKong vs NumPy vs SciPy.
 
@@ -11,44 +10,30 @@ Can be run with uv:
 Or with traditional pip:
     pip install -e ".[similarity]"
     python similarity/bench.py
-
-Environment variables:
-    NUMWARS_FILTER - Regex filter for benchmark names
-    NUMWARS_DIMS - Vector dimension (default: 2048)
 """
 
-import argparse
 import json
-import os
-import re
 import sys
 from dataclasses import dataclass
-from typing import List
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
+
+from numwars import (
+    Settings,
+    env_flag,
+    format_duration,
+    measure_average_duration,
+    normalize_dtype_name,
+    parse_numpy_dtype,
+    print_results_table,
+    print_settings,
+    read_settings,
+)
 
 try:
     import numkong as nk
 except ImportError:
     print("Error: numkong not found. Install with: pip install numkong")
-    sys.exit(1)
-
-try:
-    from utils import (
-        add_common_args,
-        calculate_gso_per_sec,
-        format_duration,
-        get_vector_dims,
-        measure_average_duration,
-        normalize_dtype_name,
-        parse_numpy_dtype,
-        print_results_table,
-        should_run_benchmark,
-    )
-except ImportError:
-    print("Error: Could not import utils.py. Make sure it's in the parent directory.")
     sys.exit(1)
 
 # Suppress floating-point warnings (overflow in half-precision, etc.)
@@ -76,9 +61,7 @@ def display_signature(input_dtype: str, output_dtype: str) -> str:
     return f"{input_dtype} \u2192 {output_dtype}"
 
 
-
-def random_matrix(count: int, ndim: int, dtype_str: str, seed: int) -> np.ndarray:
-    rng = np.random.default_rng(seed)
+def random_matrix(count: int, ndim: int, dtype_str: str, rng: np.random.Generator) -> np.ndarray:
     dtype = parse_numpy_dtype(dtype_str)
     if dtype_str.startswith("f") or dtype_str in ("bf16",):
         data = rng.uniform(-1.0, 1.0, size=(count, ndim)).astype(np.float32)
@@ -108,11 +91,10 @@ def _nk_pairwise(metric: str, a, b, dtype_str: str):
 
 
 def benchmark_numkong_pairwise(
-    metric: str, ndim: int, count: int, dtype_str: str, warmup: float, profile: float
+    metric: str, ndim: int, count: int, dtype_str: str, settings: Settings
 ) -> BenchmarkResult:
-    matrices = [
-        random_matrix(count, ndim, dtype_str, seed=i) for i in range(NUM_MATRIX_PAIRS_)
-    ]
+    rng = np.random.default_rng(settings.seed)
+    matrices = [random_matrix(count, ndim, dtype_str, rng) for _ in range(NUM_MATRIX_PAIRS_)]
     if count == 1:
         matrices = [m.flatten() for m in matrices]
 
@@ -125,7 +107,7 @@ def benchmark_numkong_pairwise(
             for _ in range(NUM_REPS_PER_PAIR_):
                 _nk_pairwise(metric, matrices[i - 1], matrices[i], dtype_str)
 
-    duration = measure_average_duration(run, warmup, profile)
+    duration = measure_average_duration(run, settings)
     total_calls = (NUM_MATRIX_PAIRS_ - 1) * NUM_REPS_PER_PAIR_
     distance_calculations = count * total_calls
     per_call = duration / total_calls
@@ -144,14 +126,11 @@ def benchmark_numkong_pairwise(
     )
 
 
-def benchmark_scipy_pairwise(
-    metric: str, ndim: int, count: int, dtype_str: str, warmup: float, profile: float
-) -> BenchmarkResult:
+def benchmark_scipy_pairwise(metric: str, ndim: int, count: int, dtype_str: str, settings: Settings) -> BenchmarkResult:
     import scipy.spatial.distance as spd
 
-    matrices = [
-        random_matrix(count, ndim, dtype_str, seed=i) for i in range(NUM_MATRIX_PAIRS_)
-    ]
+    rng = np.random.default_rng(settings.seed)
+    matrices = [random_matrix(count, ndim, dtype_str, rng) for _ in range(NUM_MATRIX_PAIRS_)]
     if count == 1:
         matrices = [m.flatten() for m in matrices]
 
@@ -178,7 +157,7 @@ def benchmark_scipy_pairwise(
             for _ in range(NUM_REPS_PER_PAIR_):
                 call_fn(matrices[i - 1], matrices[i])
 
-    duration = measure_average_duration(run, warmup, profile)
+    duration = measure_average_duration(run, settings)
     total_calls = (NUM_MATRIX_PAIRS_ - 1) * NUM_REPS_PER_PAIR_
     distance_calculations = count * total_calls
     per_call = duration / total_calls
@@ -197,14 +176,11 @@ def benchmark_scipy_pairwise(
     )
 
 
-def benchmark_scipy_dot_pairwise(
-    ndim: int, count: int, dtype_str: str, warmup: float, profile: float
-) -> BenchmarkResult:
+def benchmark_scipy_dot_pairwise(ndim: int, count: int, dtype_str: str, settings: Settings) -> BenchmarkResult:
     import scipy.linalg.blas as spb
 
-    matrices = [
-        random_matrix(count, ndim, dtype_str, seed=i) for i in range(NUM_MATRIX_PAIRS_)
-    ]
+    rng = np.random.default_rng(settings.seed)
+    matrices = [random_matrix(count, ndim, dtype_str, rng) for _ in range(NUM_MATRIX_PAIRS_)]
     if count == 1:
         matrices = [m.flatten() for m in matrices]
 
@@ -221,7 +197,7 @@ def benchmark_scipy_dot_pairwise(
             for _ in range(NUM_REPS_PER_PAIR_):
                 call_fn(matrices[i - 1], matrices[i])
 
-    duration = measure_average_duration(run, warmup, profile)
+    duration = measure_average_duration(run, settings)
     total_calls = (NUM_MATRIX_PAIRS_ - 1) * NUM_REPS_PER_PAIR_
     distance_calculations = count * total_calls
     per_call = duration / total_calls
@@ -240,12 +216,9 @@ def benchmark_scipy_dot_pairwise(
     )
 
 
-def benchmark_numpy_dot_pairwise(
-    ndim: int, count: int, dtype_str: str, warmup: float, profile: float
-) -> BenchmarkResult:
-    matrices = [
-        random_matrix(count, ndim, dtype_str, seed=i) for i in range(NUM_MATRIX_PAIRS_)
-    ]
+def benchmark_numpy_dot_pairwise(ndim: int, count: int, dtype_str: str, settings: Settings) -> BenchmarkResult:
+    rng = np.random.default_rng(settings.seed)
+    matrices = [random_matrix(count, ndim, dtype_str, rng) for _ in range(NUM_MATRIX_PAIRS_)]
     if count == 1:
         matrices = [m.flatten() for m in matrices]
 
@@ -261,7 +234,7 @@ def benchmark_numpy_dot_pairwise(
             for _ in range(NUM_REPS_PER_PAIR_):
                 call_fn(matrices[i - 1], matrices[i])
 
-    duration = measure_average_duration(run, warmup, profile)
+    duration = measure_average_duration(run, settings)
     total_calls = (NUM_MATRIX_PAIRS_ - 1) * NUM_REPS_PER_PAIR_
     distance_calculations = count * total_calls
     per_call = duration / total_calls
@@ -331,49 +304,13 @@ def result_to_entry(result: BenchmarkResult) -> dict:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Benchmark pairwise similarity: NumKong vs NumPy vs SciPy",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    add_common_args(parser)
-    parser.add_argument(
-        "--ndim",
-        type=int,
-        default=get_vector_dims(),
-        help="Number of vector dimensions (default: from NUMWARS_DIMS or 2048)",
-    )
-    parser.add_argument(
-        "-n",
-        "--count",
-        type=int,
-        default=1,
-        help="Number of vectors per batch (default: 1)",
-    )
-    parser.add_argument(
-        "--scipy",
-        action="store_true",
-        help="Include SciPy benchmarks (must be installed)",
-    )
-    parser.add_argument(
-        "--output-format",
-        choices=["table", "json"],
-        default="table",
-        help="Output format (default: table)",
-    )
-    args = parser.parse_args()
+    settings = read_settings()
+    scipy = env_flag("NUMWARS_SCIPY", False)
+    if settings.output == "table":
+        print_settings(settings)
+        print(f"- SciPy: {str(scipy).lower()}")
 
-    ndim = args.ndim
-    count = args.count
-
-    assert ndim > 0, "Vector dimensions must be > 0"
-    assert count > 0, "Count must be > 0"
-
-    filter_pattern = None
-    if args.filter:
-        try:
-            filter_pattern = re.compile(args.filter)
-        except re.error as e:
-            print(f"Warning: Invalid regex pattern '{args.filter}': {e}")
+    ndim, count = settings.dims, 1
 
     metadata = {
         "ndim": ndim,
@@ -382,43 +319,35 @@ def main():
         "numpy_version": np.__version__,
     }
 
-    all_results: List[BenchmarkResult] = []
+    all_results: list[BenchmarkResult] = []
     for library, metric, dtype_str in CANDIDATES:
-        if library == "scipy" and not args.scipy:
+        if library == "scipy" and not scipy:
             continue
 
         benchmark_name = f"similarity/{metric}/{dtype_str}"
-        if not should_run_benchmark(benchmark_name, filter_pattern):
+        if not settings.selects(benchmark_name):
             continue
 
-        if args.output_format == "table":
+        if settings.output == "table":
             print(f"Benchmarking {library}/{metric}/{dtype_str}")
 
         try:
             if library == "numkong":
-                result = benchmark_numkong_pairwise(
-                    metric, ndim, count, dtype_str, args.warmup, args.time_limit
-                )
+                result = benchmark_numkong_pairwise(metric, ndim, count, dtype_str, settings)
             elif library == "scipy" and metric == "dot":
-                result = benchmark_scipy_dot_pairwise(
-                    ndim, count, dtype_str, args.warmup, args.time_limit
-                )
+                result = benchmark_scipy_dot_pairwise(ndim, count, dtype_str, settings)
             elif library == "scipy":
-                result = benchmark_scipy_pairwise(
-                    metric, ndim, count, dtype_str, args.warmup, args.time_limit
-                )
+                result = benchmark_scipy_pairwise(metric, ndim, count, dtype_str, settings)
             elif library == "numpy":
-                result = benchmark_numpy_dot_pairwise(
-                    ndim, count, dtype_str, args.warmup, args.time_limit
-                )
+                result = benchmark_numpy_dot_pairwise(ndim, count, dtype_str, settings)
             else:
                 continue
 
             all_results.append(result)
-        except Exception as e:
+        except (AttributeError, ImportError, TypeError, ValueError) as e:
             print(f"  Error: {e}")
 
-    if args.output_format == "json":
+    if settings.output == "json":
         print(
             json.dumps(
                 {

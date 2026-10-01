@@ -50,3 +50,13 @@ requires = ["hatchling"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["."]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+extend-select = ["I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["numwars"]
+combine-as-imports = true

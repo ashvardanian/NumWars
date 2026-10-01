@@ -14,30 +14,24 @@
 //! NUMWARS_FILTER="angulars" cargo bench --features bench_similarities
 //! ```
 //!
-//! Environment variables:
-//! - NUMWARS_DIMS: Vector dimension and row count (default: 2048)
-//! - NUMWARS_FILTER: Regex to filter benchmark names
-//!
 //! Benchmark naming: similarities/{metric}/{dtype}
 //! Examples: similarities/angulars/f32, similarities/euclideans/f64
 
-
-#[path = "../utils.rs"]
-mod utils;
+use std::hint::black_box;
 
 use criterion::measurement::WallTime;
-use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion, Throughput};
+use criterion::{BenchmarkGroup, Criterion, Throughput};
 use nalgebra::DMatrix;
 use ndarray::Array2;
 use numkong::prelude::*;
 use numkong::{bf16, capabilities, u1x8, Angulars, Euclideans};
-use std::hint::black_box;
-use utils::*;
+
+use numwars::{pack_dots_matrix, propagate_thread_count, try_spawn_pool, Settings};
 
 // region: Per-Library Run Traits
 
 trait RunNumKongAngulars: Sized {
-    fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _a: &[Self], _b: &[Self], _bs: usize, _dim: usize) {}
+    fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _a: &[Self], _b: &[Self], _bs: usize, _dim: usize, _threads: usize) {}
 }
 
 impl<T: Angulars + Clone + Send + Sync + 'static> RunNumKongAngulars for T
@@ -45,10 +39,17 @@ where
     T::Accumulator: Send + Sync,
     <T as Angulars>::SpatialResult: Send + Sync,
 {
-    fn run(group: &mut BenchmarkGroup<'_, WallTime>, data_a: &[T], data_b: &[T], bs: usize, dim: usize) {
+    fn run(
+        group: &mut BenchmarkGroup<'_, WallTime>,
+        data_a: &[T],
+        data_b: &[T],
+        bs: usize,
+        dim: usize,
+        threads: usize,
+    ) {
         let tensor_a = Tensor::<T>::try_from_slice(data_a, &[bs, dim]).expect("Failed to create tensor A");
         let tensor_b = Tensor::<T>::try_from_slice(data_b, &[bs, dim]).expect("Failed to create tensor B");
-        match try_spawn_pool() {
+        match try_spawn_pool(threads) {
             Some(mut pool) => {
                 let packed_b = pack_dots_matrix(&tensor_b, Some(&mut pool));
                 group.bench_function("numkong", |bench| {
@@ -172,7 +173,7 @@ impl RunNalgebraAngulars for u8 {}
 impl RunNalgebraAngulars for bf16 {}
 
 trait RunNumKongEuclideans: Sized {
-    fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _a: &[Self], _b: &[Self], _bs: usize, _dim: usize) {}
+    fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _a: &[Self], _b: &[Self], _bs: usize, _dim: usize, _threads: usize) {}
 }
 
 impl<T: Euclideans + Clone + Send + Sync + 'static> RunNumKongEuclideans for T
@@ -180,10 +181,17 @@ where
     T::Accumulator: Send + Sync,
     <T as Euclideans>::SpatialResult: Send + Sync,
 {
-    fn run(group: &mut BenchmarkGroup<'_, WallTime>, data_a: &[T], data_b: &[T], bs: usize, dim: usize) {
+    fn run(
+        group: &mut BenchmarkGroup<'_, WallTime>,
+        data_a: &[T],
+        data_b: &[T],
+        bs: usize,
+        dim: usize,
+        threads: usize,
+    ) {
         let tensor_a = Tensor::<T>::try_from_slice(data_a, &[bs, dim]).expect("Failed to create tensor A");
         let tensor_b = Tensor::<T>::try_from_slice(data_b, &[bs, dim]).expect("Failed to create tensor B");
-        match try_spawn_pool() {
+        match try_spawn_pool(threads) {
             Some(mut pool) => {
                 let packed_b = pack_dots_matrix(&tensor_b, Some(&mut pool));
                 group.bench_function("numkong", |bench| {
@@ -314,15 +322,16 @@ impl RunNalgebraEuclideans for bf16 {}
 
 // region: Generic Helpers
 
-fn bench_angulars_dtype<T>(c: &mut Criterion, dtype: &str, batch_size: usize, dimension: usize, init: T)
+fn bench_angulars_dtype<T>(c: &mut Criterion, settings: &Settings, dtype: &str, init: T)
 where
     T: Clone + RunNumKongAngulars + RunNdarrayAngulars + RunNalgebraAngulars + 'static,
 {
     let name = format!("similarities/angulars/{dtype}");
-    if !should_run_benchmark(&name) {
+    if !settings.selects(&name) {
         return;
     }
 
+    let (batch_size, dimension) = (settings.batch_size(), settings.dims);
     let mut group = c.benchmark_group(name);
     let total_elements = batch_size * dimension;
     let data_a = vec![init.clone(); total_elements];
@@ -331,21 +340,22 @@ where
         (2 * total_elements * std::mem::size_of::<T>()) as u64,
     ));
 
-    <T as RunNumKongAngulars>::run(&mut group, &data_a, &data_b, batch_size, dimension);
+    <T as RunNumKongAngulars>::run(&mut group, &data_a, &data_b, batch_size, dimension, settings.threads);
     <T as RunNdarrayAngulars>::run(&mut group, &data_a, &data_b, batch_size, dimension);
     <T as RunNalgebraAngulars>::run(&mut group, &data_a, &data_b, batch_size, dimension);
     group.finish();
 }
 
-fn bench_euclideans_dtype<T>(c: &mut Criterion, dtype: &str, batch_size: usize, dimension: usize, init: T)
+fn bench_euclideans_dtype<T>(c: &mut Criterion, settings: &Settings, dtype: &str, init: T)
 where
     T: Clone + RunNumKongEuclideans + RunNdarrayEuclideans + RunNalgebraEuclideans + 'static,
 {
     let name = format!("similarities/euclideans/{dtype}");
-    if !should_run_benchmark(&name) {
+    if !settings.selects(&name) {
         return;
     }
 
+    let (batch_size, dimension) = (settings.batch_size(), settings.dims);
     let mut group = c.benchmark_group(name);
     let total_elements = batch_size * dimension;
     let data_a = vec![init.clone(); total_elements];
@@ -354,7 +364,7 @@ where
         (2 * total_elements * std::mem::size_of::<T>()) as u64,
     ));
 
-    <T as RunNumKongEuclideans>::run(&mut group, &data_a, &data_b, batch_size, dimension);
+    <T as RunNumKongEuclideans>::run(&mut group, &data_a, &data_b, batch_size, dimension, settings.threads);
     <T as RunNdarrayEuclideans>::run(&mut group, &data_a, &data_b, batch_size, dimension);
     <T as RunNalgebraEuclideans>::run(&mut group, &data_a, &data_b, batch_size, dimension);
     group.finish();
@@ -365,39 +375,30 @@ where
 // region: Benchmarks
 
 /// Benchmark N×M angular distance matrix.
-pub fn bench_angulars(c: &mut Criterion) {
-    capabilities::configure_thread();
-    propagate_thread_count();
-    let dimension = get_vector_dims();
-    let batch_size = get_vector_dims();
-    bench_angulars_dtype(c, "f32", batch_size, dimension, 1.0f32);
-    bench_angulars_dtype(c, "f64", batch_size, dimension, 1.0f64);
-    bench_angulars_dtype(c, "i8", batch_size, dimension, 1i8);
-    bench_angulars_dtype(c, "u8", batch_size, dimension, 1u8);
-    bench_angulars_dtype(c, "bf16", batch_size, dimension, bf16::from_f32(1.0));
+pub fn bench_angulars(c: &mut Criterion, settings: &Settings) {
+    bench_angulars_dtype(c, settings, "f32", 1.0f32);
+    bench_angulars_dtype(c, settings, "f64", 1.0f64);
+    bench_angulars_dtype(c, settings, "i8", 1i8);
+    bench_angulars_dtype(c, settings, "u8", 1u8);
+    bench_angulars_dtype(c, settings, "bf16", bf16::from_f32(1.0));
 }
 
 /// Benchmark N×M Euclidean distance matrix.
-pub fn bench_euclideans(c: &mut Criterion) {
-    capabilities::configure_thread();
-    propagate_thread_count();
-    let dimension = get_vector_dims();
-    let batch_size = get_vector_dims();
-    bench_euclideans_dtype(c, "f32", batch_size, dimension, 1.0f32);
-    bench_euclideans_dtype(c, "f64", batch_size, dimension, 1.0f64);
-    bench_euclideans_dtype(c, "i8", batch_size, dimension, 1i8);
-    bench_euclideans_dtype(c, "u8", batch_size, dimension, 1u8);
-    bench_euclideans_dtype(c, "bf16", batch_size, dimension, bf16::from_f32(1.0));
+pub fn bench_euclideans(c: &mut Criterion, settings: &Settings) {
+    bench_euclideans_dtype(c, settings, "f32", 1.0f32);
+    bench_euclideans_dtype(c, settings, "f64", 1.0f64);
+    bench_euclideans_dtype(c, settings, "i8", 1i8);
+    bench_euclideans_dtype(c, settings, "u8", 1u8);
+    bench_euclideans_dtype(c, settings, "bf16", bf16::from_f32(1.0));
 }
 
 /// Benchmark N×M Hamming distance matrix.
-pub fn bench_hammings(c: &mut Criterion) {
-    capabilities::configure_thread();
-    let dimension = get_vector_dims();
+pub fn bench_hammings(c: &mut Criterion, settings: &Settings) {
+    let dimension = settings.dims;
     let byte_count = dimension.div_ceil(8);
-    let batch_size = get_vector_dims();
+    let batch_size = settings.batch_size();
 
-    if should_run_benchmark("similarities/hammings/u1x8") {
+    if settings.selects("similarities/hammings/u1x8") {
         let mut group = c.benchmark_group("similarities/hammings/u1x8");
         let total_bytes = batch_size * byte_count;
         let matrix_a_data = vec![u1x8::new(0xAA); total_bytes];
@@ -409,7 +410,7 @@ pub fn bench_hammings(c: &mut Criterion) {
         let tensor_b = Tensor::<u1x8>::try_from_slice(&matrix_b_data, &[batch_size, dimension])
             .expect("Failed to create tensor B");
 
-        match try_spawn_pool() {
+        match try_spawn_pool(settings.threads) {
             Some(mut pool) => {
                 let packed_b = pack_dots_matrix(&tensor_b, Some(&mut pool));
                 group.bench_function("numkong", |bench| {
@@ -428,13 +429,12 @@ pub fn bench_hammings(c: &mut Criterion) {
 }
 
 /// Benchmark N×M Jaccard distance matrix.
-pub fn bench_jaccards(c: &mut Criterion) {
-    capabilities::configure_thread();
-    let dimension = get_vector_dims();
+pub fn bench_jaccards(c: &mut Criterion, settings: &Settings) {
+    let dimension = settings.dims;
     let byte_count = dimension.div_ceil(8);
-    let batch_size = get_vector_dims();
+    let batch_size = settings.batch_size();
 
-    if should_run_benchmark("similarities/jaccards/u1x8") {
+    if settings.selects("similarities/jaccards/u1x8") {
         let mut group = c.benchmark_group("similarities/jaccards/u1x8");
         let total_bytes = batch_size * byte_count;
         let matrix_a_data = vec![u1x8::new(0xAA); total_bytes];
@@ -446,7 +446,7 @@ pub fn bench_jaccards(c: &mut Criterion) {
         let tensor_b = Tensor::<u1x8>::try_from_slice(&matrix_b_data, &[batch_size, dimension])
             .expect("Failed to create tensor B");
 
-        match try_spawn_pool() {
+        match try_spawn_pool(settings.threads) {
             Some(mut pool) => {
                 let packed_b = pack_dots_matrix(&tensor_b, Some(&mut pool));
                 group.bench_function("numkong", |bench| {
@@ -468,11 +468,16 @@ pub fn bench_jaccards(c: &mut Criterion) {
 
 // region: Main
 
-criterion_group! {
-    name = benches;
-    config = utils::configure_criterion();
-    targets = bench_angulars, bench_euclideans, bench_hammings, bench_jaccards
+fn main() {
+    let settings = Settings::read();
+    capabilities::configure_thread();
+    propagate_thread_count(settings.threads);
+    let mut criterion = numwars::configure_criterion(&settings);
+    bench_angulars(&mut criterion, &settings);
+    bench_euclideans(&mut criterion, &settings);
+    bench_hammings(&mut criterion, &settings);
+    bench_jaccards(&mut criterion, &settings);
+    criterion.final_summary();
 }
-criterion_main!(benches);
 
 // endregion

@@ -9,24 +9,20 @@
 //! NUMWARS_FILTER="mesh/rmsd" cargo bench --features bench_mesh
 //! ```
 //!
-//! Environment variables:
-//! - NUMWARS_DIMS: Number of 3D points per cloud (default: 2048)
-//! - NUMWARS_FILTER: Regex to filter benchmark names
-//!
 //! Benchmark naming: mesh/{operation}/{dtype}
 //! Examples: mesh/rmsd/f32, mesh/kabsch/f64, mesh/umeyama/bf16
 
-#[path = "../utils.rs"]
-mod utils;
+use std::hint::black_box;
 
 use criterion::measurement::WallTime;
-use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion, Throughput};
+use criterion::{BenchmarkGroup, Criterion, Throughput};
 use nalgebra::Matrix3;
 use num_traits::Float;
-use numkong::{bf16, capabilities, f16, MeshAlignment};
-use rand::Rng;
-use std::hint::black_box;
-use utils::*;
+use numkong::{bf16, capabilities, f16, MeshAlignment, NumberLike};
+use rand::rngs::StdRng;
+use rand::{Rng, RngExt, SeedableRng};
+
+use numwars::{BaselineConvert, Settings};
 
 // region: Operation Model
 
@@ -256,12 +252,13 @@ where
 
 // region: Data Generation
 
-fn generate_point_cloud<T>(rng: &mut impl Rng, count: usize) -> Vec<[T; 3]> {
-    generate_random::<[T; 3]>(rng, count)
-}
-
-fn get_point_count() -> usize {
-    get_env_parsed("NUMWARS_MESH_POINTS", get_vector_dims())
+/// Standard-normal points through Box-Muller, like `standard_normal` in `bench.py`.
+fn generate_point_cloud<T: NumberLike>(rng: &mut impl Rng, count: usize) -> Vec<[T; 3]> {
+    let mut normal = || {
+        let (radius, angle) = (1.0 - rng.random::<f64>(), rng.random::<f64>());
+        T::from_f64((-2.0 * radius.ln()).sqrt() * (std::f64::consts::TAU * angle).cos())
+    };
+    (0..count).map(|_| [normal(), normal(), normal()]).collect()
 }
 
 // endregion
@@ -386,15 +383,16 @@ impl RunNumKong for bf16 {}
 
 // region: Generic Helpers
 
-fn bench_mesh_op_dtype<T>(c: &mut Criterion, rng: &mut impl Rng, op: MeshOp, dtype: &str, count: usize)
+fn bench_mesh_op_dtype<T>(c: &mut Criterion, settings: &Settings, rng: &mut impl Rng, op: MeshOp, dtype: &str)
 where
-    T: RunBaseline + RunNalgebra + RunNumKong + Clone + 'static,
+    T: RunBaseline + RunNalgebra + RunNumKong + NumberLike + Clone + 'static,
 {
     let name = format!("mesh/{}/{}", op.slug(), dtype);
-    if !should_run_benchmark(&name) {
+    if !settings.selects(&name) {
         return;
     }
 
+    let count = settings.batch_size();
     let mut group = c.benchmark_group(name);
     group.throughput(Throughput::Bytes((2 * count * std::mem::size_of::<[T; 3]>()) as u64));
 
@@ -413,34 +411,30 @@ where
 // region: Benchmarks
 
 /// Benchmark RMSD (root mean square deviation without alignment).
-pub fn bench_rmsd(c: &mut Criterion) {
-    capabilities::configure_thread();
-    let count = get_point_count();
-    let mut rng = rand::rng();
-    bench_mesh_op_dtype::<f32>(c, &mut rng, MeshOp::Rmsd, "f32", count);
-    bench_mesh_op_dtype::<f64>(c, &mut rng, MeshOp::Rmsd, "f64", count);
-    bench_mesh_op_dtype::<f16>(c, &mut rng, MeshOp::Rmsd, "f16", count);
-    bench_mesh_op_dtype::<bf16>(c, &mut rng, MeshOp::Rmsd, "bf16", count);
+pub fn bench_rmsd(c: &mut Criterion, settings: &Settings) {
+    let mut rng = StdRng::seed_from_u64(settings.seed.into());
+    bench_mesh_op_dtype::<f32>(c, settings, &mut rng, MeshOp::Rmsd, "f32");
+    bench_mesh_op_dtype::<f64>(c, settings, &mut rng, MeshOp::Rmsd, "f64");
+    bench_mesh_op_dtype::<f16>(c, settings, &mut rng, MeshOp::Rmsd, "f16");
+    bench_mesh_op_dtype::<bf16>(c, settings, &mut rng, MeshOp::Rmsd, "bf16");
 }
 
 /// Benchmark Kabsch algorithm (optimal rotation alignment).
-pub fn bench_kabsch(c: &mut Criterion) {
-    let count = get_point_count();
-    let mut rng = rand::rng();
-    bench_mesh_op_dtype::<f32>(c, &mut rng, MeshOp::Kabsch, "f32", count);
-    bench_mesh_op_dtype::<f64>(c, &mut rng, MeshOp::Kabsch, "f64", count);
-    bench_mesh_op_dtype::<f16>(c, &mut rng, MeshOp::Kabsch, "f16", count);
-    bench_mesh_op_dtype::<bf16>(c, &mut rng, MeshOp::Kabsch, "bf16", count);
+pub fn bench_kabsch(c: &mut Criterion, settings: &Settings) {
+    let mut rng = StdRng::seed_from_u64(settings.seed.into());
+    bench_mesh_op_dtype::<f32>(c, settings, &mut rng, MeshOp::Kabsch, "f32");
+    bench_mesh_op_dtype::<f64>(c, settings, &mut rng, MeshOp::Kabsch, "f64");
+    bench_mesh_op_dtype::<f16>(c, settings, &mut rng, MeshOp::Kabsch, "f16");
+    bench_mesh_op_dtype::<bf16>(c, settings, &mut rng, MeshOp::Kabsch, "bf16");
 }
 
 /// Benchmark Umeyama algorithm (Kabsch + uniform scale).
-pub fn bench_umeyama(c: &mut Criterion) {
-    let count = get_point_count();
-    let mut rng = rand::rng();
-    bench_mesh_op_dtype::<f32>(c, &mut rng, MeshOp::Umeyama, "f32", count);
-    bench_mesh_op_dtype::<f64>(c, &mut rng, MeshOp::Umeyama, "f64", count);
-    bench_mesh_op_dtype::<f16>(c, &mut rng, MeshOp::Umeyama, "f16", count);
-    bench_mesh_op_dtype::<bf16>(c, &mut rng, MeshOp::Umeyama, "bf16", count);
+pub fn bench_umeyama(c: &mut Criterion, settings: &Settings) {
+    let mut rng = StdRng::seed_from_u64(settings.seed.into());
+    bench_mesh_op_dtype::<f32>(c, settings, &mut rng, MeshOp::Umeyama, "f32");
+    bench_mesh_op_dtype::<f64>(c, settings, &mut rng, MeshOp::Umeyama, "f64");
+    bench_mesh_op_dtype::<f16>(c, settings, &mut rng, MeshOp::Umeyama, "f16");
+    bench_mesh_op_dtype::<bf16>(c, settings, &mut rng, MeshOp::Umeyama, "bf16");
 }
 
 // endregion
@@ -504,11 +498,14 @@ mod tests {
 
 // region: Main
 
-criterion_group! {
-    name = benches;
-    config = utils::configure_criterion();
-    targets = bench_rmsd, bench_kabsch, bench_umeyama
+fn main() {
+    let settings = Settings::read();
+    capabilities::configure_thread();
+    let mut criterion = numwars::configure_criterion(&settings);
+    bench_rmsd(&mut criterion, &settings);
+    bench_kabsch(&mut criterion, &settings);
+    bench_umeyama(&mut criterion, &settings);
+    criterion.final_summary();
 }
-criterion_main!(benches);
 
 // endregion

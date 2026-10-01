@@ -163,28 +163,28 @@ In Rust:
 
 ```text
 NumKong:
-numkong::EachSum i8 → i8   ███████████████████████████████████████████████████ 111.47 GB/s
-numkong::EachSum f32 → f32 ████████████████████████████████████████████▋        97.55 GB/s
-numkong::EachSum f16 → f16 ████████████████████████████████████████████▏        96.56 GB/s
+numkong::EachSum i8 → i8   ███████████████████████████████████████████████████ 103.81 GB/s
+numkong::EachSum f32 → f32 ████████████████████████████████████████████▋        90.85 GB/s
+numkong::EachSum f16 → f16 ████████████████████████████████████████████▏        89.93 GB/s
 
 Alternatives:
-nalgebra::add f32 → f32    ███████████████████████████████████████████▌         95.31 GB/s
-ndarray::add f32 → f32     ███████████████████████████████████████████▍         94.84 GB/s
-serial code f32 → f32      ███████████████████████████████████████████          94.06 GB/s
+nalgebra::add f32 → f32    ███████████████████████████████████████████▌         88.76 GB/s
+ndarray::add f32 → f32     ███████████████████████████████████████████▍         88.33 GB/s
+serial code f32 → f32      ███████████████████████████████████████████          87.60 GB/s
 ```
 
 In Python:
 
 ```text
-numpy.add i8 → i8       ██████████████████████████████████████████████████████ 143.56 GB/s
-numkong.add i8 → i8     ██████████████████████████████████████████████▌        123.77 GB/s
-numkong.add f32 → f32   ████████████████████████████████████████████▌          118.39 GB/s
-numpy.add f32 → f32     ███████████████████████████████████████████▍           115.32 GB/s
-numpy.add f64 → f64     ███████████████████████████████████████████            114.37 GB/s
-numkong.add f16 → f16   ████████████████████████████████████████▎              107.29 GB/s
-numkong.add f64 → f64   █████████████████████████████████████▌                 100.01 GB/s
-numkong.add bf16 → bf16 ███████████████████████████▌                            73.27 GB/s
-numpy.add f16 → f16     █▌                                                       4.08 GB/s
+numpy.add i8 → i8       ██████████████████████████████████████████████████████ 133.70 GB/s
+numkong.add i8 → i8     ██████████████████████████████████████████████▌        115.27 GB/s
+numkong.add f32 → f32   ████████████████████████████████████████████▌          110.26 GB/s
+numpy.add f32 → f32     ███████████████████████████████████████████▍           107.40 GB/s
+numpy.add f64 → f64     ███████████████████████████████████████████            106.52 GB/s
+numkong.add f16 → f16   ████████████████████████████████████████▎              99.922 GB/s
+numkong.add f64 → f64   █████████████████████████████████████▌                 93.142 GB/s
+numkong.add bf16 → bf16 ███████████████████████████▌                            68.24 GB/s
+numpy.add f16 → f16     █▌                                                       3.80 GB/s
 ```
 
 See [each/README.md](each/README.md) for details.
@@ -196,40 +196,40 @@ The suite covers sum and row-wise L2 norms.
 In Rust:
 
 ```text
-polars::ChunkedArray::sum f64 → f64     ██████████████████████████████████████ 113.57 GB/s
-polars::ChunkedArray::sum f32 → f32     █████████████████████████████████████  110.70 GB/s
-ndarray::ArrayBase::sum f64 → f64       █████████████████████████████████▎      99.49 GB/s
-ndarray::ArrayBase::sum f32 → f32       ████████████████▋                       49.83 GB/s
-numkong::reduce_moments().sum f32 → f64 ███▍                                    10.31 GB/s
-serial sum loop f32 → f32               ██▊                                      8.50 GB/s
+polars::ChunkedArray::sum f64 → f64     ██████████████████████████████████████ 105.77 GB/s
+polars::ChunkedArray::sum f32 → f32     █████████████████████████████████████  103.10 GB/s
+ndarray::ArrayBase::sum f64 → f64       █████████████████████████████████▎      92.66 GB/s
+ndarray::ArrayBase::sum f32 → f32       ████████████████▋                       46.41 GB/s
+numkong::reduce_moments().sum f32 → f64 ███▍                                    9.602 GB/s
+serial sum loop f32 → f32               ██▊                                      7.92 GB/s
 ```
 
 Row-wise L2 norms over a 2048×2048 matrix:
 
 ```text
-ndarray row norms f64 → f64             ███████████████████████████████████████ 89.72 GB/s
-ndarray row norms f32 → f32             ███████████████████████▏                53.24 GB/s
-numkong::Dot self-dot + sqrt bf16 → f32 █████████████▎                          30.64 GB/s
-numkong::Dot self-dot + sqrt f64        ██████████▏                             23.44 GB/s
-serial row norms loop f64 → f64         ███████▊                                17.95 GB/s
-numkong::Dot self-dot + sqrt f32        ████▌                                   10.60 GB/s
-serial row norms loop f32 → f32         ███▉                                     9.20 GB/s
+ndarray row norms f64 → f64             ███████████████████████████████████████ 83.56 GB/s
+ndarray row norms f32 → f32             ███████████████████████▏                49.58 GB/s
+numkong::Dot self-dot + sqrt bf16 → f32 █████████████▎                          28.54 GB/s
+numkong::Dot self-dot + sqrt f64        ██████████▏                             21.83 GB/s
+serial row norms loop f64 → f64         ███████▊                                16.72 GB/s
+numkong::Dot self-dot + sqrt f32        ████▌                                   9.872 GB/s
+serial row norms loop f32 → f32         ███▉                                     8.57 GB/s
 ```
 
 In Python over 1,000,000 elements:
 
 ```text
-numpy.sum f64 → f64         ███████████████████████████████████████████████████ 61.26 GB/s
-numpy.sum f32 → f32         ████████████████████████████▏                       33.92 GB/s
-numpy.linalg.norm f64 → f64 █████████████████████████▏                          30.26 GB/s
-numkong.sum u8 → u8         ██████████████████▏                                 21.78 GB/s
-numkong.sum i8 → i8         █████████████████▊                                  21.40 GB/s
-numpy.linalg.norm f32 → f64 ████████████████▊                                   20.15 GB/s
-numkong.norm f64 → f64      ██████████████▌                                     17.44 GB/s
-numkong.sum f64 → f64       █████████████▌                                      16.34 GB/s
-numkong.norm f32 → f64      ████████████▌                                       15.10 GB/s
-numkong.sum f32 → f32       ███████▉                                             9.49 GB/s
-numpy.sum i8 → i8           █████▌                                               6.73 GB/s
+numpy.sum f64 → f64         ███████████████████████████████████████████████████ 57.05 GB/s
+numpy.sum f32 → f32         ████████████████████████████▏                       31.59 GB/s
+numpy.linalg.norm f64 → f64 █████████████████████████▏                          28.18 GB/s
+numkong.sum u8 → u8         ██████████████████▏                                 20.28 GB/s
+numkong.sum i8 → i8         █████████████████▊                                  19.93 GB/s
+numpy.linalg.norm f32 → f64 ████████████████▊                                   18.77 GB/s
+numkong.norm f64 → f64      ██████████████▌                                     16.24 GB/s
+numkong.sum f64 → f64       █████████████▌                                      15.22 GB/s
+numkong.norm f32 → f64      ████████████▌                                       14.06 GB/s
+numkong.sum f32 → f32       ███████▉                                             8.84 GB/s
+numpy.sum i8 → i8           █████▌                                               6.27 GB/s
 ```
 
 See [reduce/README.md](reduce/README.md) for details.
@@ -357,7 +357,7 @@ Every Rust benchmark is a Criterion harness behind a Cargo feature gate.
 Run one suite at a time or all at once:
 
 ```bash
-# One suite — default 2048-element workload
+# One suite
 RUSTFLAGS="-C target-cpu=native" \
 cargo bench --features bench_similarity --bench bench_similarity
 
@@ -368,16 +368,24 @@ cargo bench --features all
 
 Tuning knobs (environment variables):
 
-| Variable                  | Default  | Purpose                                           |
-| :------------------------ | :------- | :------------------------------------------------ |
-| `NUMWARS_DIMS`            | 2048     | Vector / matrix dimension shared by most suites   |
-| `NUMWARS_DIMS_HEIGHT`     | 2048     | Row count for GEMM workloads (dots, maxsim)       |
-| `NUMWARS_DIMS_WIDTH`      | 2048     | Column count for GEMM workloads (dots, maxsim)    |
-| `NUMWARS_DIMS_DEPTH`      | 2048     | Shared (contraction) dimension for GEMM workloads |
-| `NUMWARS_FILTER`          | _(none)_ | Regex to select benchmarks by name                |
-| `NUMWARS_WARMUP_SECONDS`  | 3.0      | Criterion warm-up time                            |
-| `NUMWARS_PROFILE_SECONDS` | 10.0     | Criterion measurement time                        |
-| `NUMWARS_SAMPLE_SIZE`     | 50       | Criterion sample count                            |
+| Variable                 | Default | Meaning                                                   |
+| :----------------------- | :------ | :-------------------------------------------------------- |
+| `NUMWARS_FILTER`         |         | Regex over benchmark names, or a substring if not a regex |
+| `NUMWARS_SEED`           | 42      | 32-bit seed for random inputs, or `random`                |
+| `NUMWARS_WARMUP`         | 1s      | Warm-up per benchmark, like `200ms` or `1s`               |
+| `NUMWARS_TIME_LIMIT`     | 10s     | Measurement time per benchmark, like `200ms` or `10s`     |
+| `NUMWARS_BATCH_PER_CORE` | 2048    | Items per call, times the threads: elements, rows, points |
+| `NUMWARS_THREADS`        | 1       | Threads for NumKong and competitors, `0` for all cores    |
+| `NUMWARS_DIMS`           | 1536    | Vector length                                             |
+| `NUMWARS_DIMS_HEIGHT`    | 1024    | Rows of `C = A @ B.T` in GEMM-shaped suites               |
+| `NUMWARS_DIMS_WIDTH`     | 128     | Columns of `C = A @ B.T` in GEMM-shaped suites            |
+| `NUMWARS_DIMS_DEPTH`     | 1536    | Shared dimension of `A` and `B` in GEMM-shaped suites     |
+| `NUMWARS_SAMPLE_SIZE`    | 50      | Criterion samples per benchmark, Rust only                |
+| `NUMWARS_OUTPUT`         | table   | Human-readable `table` or machine-readable `json`, Python |
+| `NUMWARS_SCIPY`          | false   | Whether the Python `similarity` suite also times SciPy    |
+
+The Python suites read the same variables, and take no flags.
+An empty variable counts as unset, and a value that does not parse stops the run.
 
 ### Python
 

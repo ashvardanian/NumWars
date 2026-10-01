@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 All-pairs similarity matrix benchmarks: NumKong vs SciPy.
 
@@ -11,48 +10,33 @@ Can be run with uv:
 Or with traditional pip:
     pip install -e ".[similarities]"
     python similarities/bench.py
-
-Environment variables:
-    NUMWARS_FILTER - Regex filter for benchmark names
-    NUMWARS_DIMS - Vector dimension and row count (default: 2048)
 """
 
-import argparse
 import json
-import os
-import re
 import sys
 from dataclasses import dataclass
-from typing import List
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
+import scipy
 import scipy.spatial.distance as spd
-import tabulate
+
+from numwars import (
+    Settings,
+    calculate_gso_per_sec,
+    format_duration,
+    measure_average_duration,
+    normalize_dtype_name,
+    numkong_dtype_name,
+    parse_numpy_dtype,
+    print_results_table,
+    print_settings,
+    read_settings,
+)
 
 try:
     import numkong as nk
 except ImportError:
     print("Error: numkong not found. Install with: pip install numkong")
-    sys.exit(1)
-
-try:
-    from utils import (
-        add_common_args,
-        calculate_gso_per_sec,
-        format_duration,
-        get_batch_size,
-        get_vector_dims,
-        measure_average_duration,
-        normalize_dtype_name,
-        numkong_dtype_name,
-        parse_numpy_dtype,
-        print_results_table,
-        should_run_benchmark,
-    )
-except ImportError:
-    print("Error: Could not import utils.py. Make sure it's in the parent directory.")
     sys.exit(1)
 
 
@@ -73,8 +57,7 @@ def display_signature_name(input_dtype: str, output_dtype: str) -> str:
     return f"{input_dtype} \u2192 {output_dtype}"
 
 
-
-def build_matrices(batch_size: int, ndim: int, dtype_str: str = "f32", seed: int = 42):
+def build_matrices(batch_size: int, ndim: int, dtype_str: str, seed: int):
     """Build two random matrices of shape (batch_size, ndim) in the given dtype."""
     rng = np.random.default_rng(seed)
     dtype = parse_numpy_dtype(dtype_str)
@@ -104,18 +87,15 @@ def benchmark_scipy(
     metric: str,
     batch_size: int,
     ndim: int,
-    seed: int,
-    warmup: float,
-    profile: float,
+    settings: Settings,
 ) -> BenchmarkResult:
-    A, B = build_matrices(batch_size, ndim, "f32", seed)
+    A, B = build_matrices(batch_size, ndim, "f32", settings.seed)
     out = np.empty((batch_size, batch_size), dtype=np.float64)
     scipy_metric = SCIPY_METRIC_MAP[metric]
 
     duration = measure_average_duration(
         lambda: spd.cdist(A, B, scipy_metric, out=out),
-        warmup,
-        profile,
+        settings,
     )
     num_operations = batch_size * batch_size * ndim
     return BenchmarkResult(
@@ -139,11 +119,9 @@ def benchmark_numkong(
     batch_size: int,
     ndim: int,
     dtype_str: str,
-    seed: int,
-    warmup: float,
-    profile: float,
+    settings: Settings,
 ) -> BenchmarkResult:
-    A, B = build_matrices(batch_size, ndim, dtype_str, seed)
+    A, B = build_matrices(batch_size, ndim, dtype_str, settings.seed)
 
     # Pack B once (maps short dtype names to the ones dots_pack expects)
     pack_dtype = PACK_DTYPE_MAP.get(dtype_str, dtype_str)
@@ -160,8 +138,7 @@ def benchmark_numkong(
 
     duration = measure_average_duration(
         lambda: func(A, B_packed, out=out_tensor),
-        warmup,
-        profile,
+        settings,
     )
     num_operations = batch_size * batch_size * ndim
     return BenchmarkResult(
@@ -198,52 +175,19 @@ def result_to_entry(result: BenchmarkResult) -> dict:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Benchmark all-pairs similarity matrices (packed kernels)",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    add_common_args(parser)
-    parser.add_argument(
-        "--ndim",
-        type=int,
-        default=None,
-        help="Vector dimensions (default: NUMWARS_DIMS or 2048)",
-    )
-    parser.add_argument(
-        "--batch-size",
-        type=int,
-        default=None,
-        help="Number of vectors per matrix (default: NUMWARS_DIMS or 2048)",
-    )
-    parser.add_argument(
-        "--output-format",
-        choices=["table", "json"],
-        default="table",
-        help="Choose human-readable table output or machine-readable JSON (default: table).",
-    )
-    args = parser.parse_args()
+    settings = read_settings()
+    if settings.output == "table":
+        print_settings(settings)
 
-    ndim = args.ndim if args.ndim is not None else get_vector_dims()
-    batch_size = args.batch_size if args.batch_size is not None else get_batch_size()
-
-    filter_pattern = None
-    if args.filter:
-        try:
-            filter_pattern = re.compile(args.filter)
-        except re.error as e:
-            print(f"Warning: Invalid regex pattern '{args.filter}': {e}")
+    ndim, batch_size = settings.dims, settings.batch_size
 
     metadata = {
         "ndim": ndim,
         "batch_size": batch_size,
         "numkong_version": getattr(nk, "__version__", None),
         "numpy_version": np.__version__,
+        "scipy_version": scipy.__version__,
     }
-    try:
-        import scipy as sp
-        metadata["scipy_version"] = sp.__version__
-    except Exception:
-        pass
 
     candidates = [
         ("numkong", "angular", "f32"),
@@ -258,27 +202,23 @@ def main():
         ("scipy", "euclidean", "f32"),
     ]
 
-    all_results: List[BenchmarkResult] = []
+    all_results: list[BenchmarkResult] = []
     for library_slug, metric, dtype in candidates:
         benchmark_name = f"similarities/{metric}/{library_slug}/{dtype}"
-        if not should_run_benchmark(benchmark_name, filter_pattern):
+        if not settings.selects(benchmark_name):
             continue
-        if args.output_format == "table":
+        if settings.output == "table":
             print(f"Benchmarking {benchmark_name}")
         try:
             if library_slug == "numkong":
-                all_results.append(
-                    benchmark_numkong(metric, batch_size, ndim, dtype, args.seed, args.warmup, args.time_limit)
-                )
+                all_results.append(benchmark_numkong(metric, batch_size, ndim, dtype, settings))
             else:
-                all_results.append(
-                    benchmark_scipy(metric, batch_size, ndim, args.seed, args.warmup, args.time_limit)
-                )
-        except Exception as e:
-            if args.output_format == "table":
+                all_results.append(benchmark_scipy(metric, batch_size, ndim, settings))
+        except (AttributeError, TypeError, ValueError) as e:
+            if settings.output == "table":
                 print(f"  Error: {e}")
 
-    if args.output_format == "json":
+    if settings.output == "json":
         print(
             json.dumps(
                 {

@@ -13,25 +13,18 @@
 //! NUMWARS_FILTER="f16|bf16|f32" cargo bench --features bench_maxsim
 //! ```
 //!
-//! Environment variables:
-//! - NUMWARS_DIMS_DEPTH: Shared dimension k (default: 2048)
-//! - NUMWARS_DIMS_HEIGHT: Query count m (default: 2048)
-//! - NUMWARS_DIMS_WIDTH: Document count n (default: 2048)
-//! - NUMWARS_FILTER: Regex to filter benchmark names
-//!
 //! Benchmark naming: maxsim/{dtype}
 //! Examples: maxsim/f32, maxsim/bf16, maxsim/f16
 
-#[path = "../utils.rs"]
-mod utils;
+use std::hint::black_box;
 
 use criterion::measurement::WallTime;
-use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion, Throughput};
+use criterion::{BenchmarkGroup, Criterion, Throughput};
 use ndarray::Array2;
 use numkong::prelude::*;
 use numkong::{bf16, capabilities, f16, MaxSim, MaxSimPackedMatrix};
-use std::hint::black_box;
-use utils::*;
+
+use numwars::Settings;
 
 // region: Per-Library Run Traits
 
@@ -125,20 +118,16 @@ impl RunNdarray for bf16 {}
 
 // region: Generic Helpers
 
-fn bench_maxsim_dtype<T>(
-    c: &mut Criterion,
-    dtype: &str,
-    query_count: usize,
-    document_count: usize,
-    dimension: usize,
-    init: T,
-) where
+fn bench_maxsim_dtype<T>(c: &mut Criterion, settings: &Settings, dtype: &str, init: T)
+where
     T: Clone + RunNumKong + RunNdarray + 'static,
 {
     let name = format!("maxsim/{dtype}");
-    if !should_run_benchmark(&name) {
+    if !settings.selects(&name) {
         return;
     }
+
+    let (query_count, document_count, dimension) = (settings.dims_height, settings.dims_width, settings.dims_depth);
 
     let mut group = c.benchmark_group(name);
     let query_vectors = vec![init.clone(); query_count * dimension];
@@ -172,26 +161,22 @@ fn bench_maxsim_dtype<T>(
 // region: Benchmarks
 
 /// Benchmark MaxSim scoring.
-pub fn bench_maxsim(c: &mut Criterion) {
-    capabilities::configure_thread();
-    let dimension = get_matrix_dims_depth();
-    let query_count = get_matrix_dims_height();
-    let document_count = get_matrix_dims_width();
-
-    bench_maxsim_dtype(c, "f32", query_count, document_count, dimension, 1.0f32);
-    bench_maxsim_dtype(c, "bf16", query_count, document_count, dimension, bf16::from_f32(1.0));
-    bench_maxsim_dtype(c, "f16", query_count, document_count, dimension, f16::from_f32(1.0));
+pub fn bench_maxsim(c: &mut Criterion, settings: &Settings) {
+    bench_maxsim_dtype(c, settings, "f32", 1.0f32);
+    bench_maxsim_dtype(c, settings, "bf16", bf16::from_f32(1.0));
+    bench_maxsim_dtype(c, settings, "f16", f16::from_f32(1.0));
 }
 
 // endregion
 
 // region: Main
 
-criterion_group! {
-    name = benches;
-    config = utils::configure_criterion();
-    targets = bench_maxsim
+fn main() {
+    let settings = Settings::read();
+    capabilities::configure_thread();
+    let mut criterion = numwars::configure_criterion(&settings);
+    bench_maxsim(&mut criterion, &settings);
+    criterion.final_summary();
 }
-criterion_main!(benches);
 
 // endregion
