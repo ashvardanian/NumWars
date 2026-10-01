@@ -22,7 +22,8 @@ requires-python = ">=3.10"
 version = "0.1.0"
 
 [project.optional-dependencies]
-all = ["numwars[similarity,each,dots,geospatial,mesh,reduce,similarities,ml]"]
+all = ["numwars[similarity,each,dots,geospatial,mesh,reduce,similarities,attention,ml]"]
+attention = ["numkong>=7.7.0", "numpy>=2.2", "torch>=2.6", "tabulate>=0.9"]
 dots = ["numkong>=7.0.0", "numpy>=2.2", "tabulate>=0.9", "ml_dtypes>=0.5.0"]
 each = ["numkong>=7.0.0", "numpy>=2.2", "tabulate>=0.9", "ml_dtypes>=0.5.0"]
 geospatial = ["numkong>=7.0.0", "numpy>=2.2", "geopy>=2.4", "tabulate>=0.9"]

@@ -27,6 +27,8 @@ regex = "1.11"
 # Competitors (all optional)
 argminmax = {version = "0.6", optional = true, default-features = false, features = ["float"]}
 blas-src = {version = "0.14", optional = true, default-features = false, features = ["openblas"]}
+candle-core = {version = "0.9", optional = true, default-features = false}
+candle-nn = {version = "0.9", optional = true, default-features = false}
 faer = {version = "0.24", optional = true}
 geo = {version = "0.32", optional = true}
 matrixmultiply = {version = "0.3", optional = true, features = ["threading"]}
@@ -37,7 +39,8 @@ polars = {version = "0.53", optional = true, default-features = false, features 
 wide = {version = "1.1", optional = true}
 
 [features]
-all = ["bench_similarity", "bench_each", "bench_dots", "bench_geospatial", "bench_similarities", "bench_maxsim", "bench_reduce", "bench_mesh"]
+all = ["bench_similarity", "bench_each", "bench_dots", "bench_geospatial", "bench_similarities", "bench_maxsim", "bench_reduce", "bench_mesh", "bench_attention"]
+bench_attention = ["half", "numkong/parallel", "dep:candle-core", "dep:candle-nn"]
 bench_dots = [
   "rand",
   "ndarray",
@@ -103,6 +106,12 @@ harness = false
 name = "bench_similarities"
 path = "similarities/bench.rs"
 required-features = ["bench_similarities"]
+
+[[bench]]
+harness = false
+name = "bench_attention"
+path = "attention/bench.rs"
+required-features = ["bench_attention"]
 
 [[bench]]
 harness = false
