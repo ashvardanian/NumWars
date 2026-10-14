@@ -384,6 +384,10 @@ Tuning knobs (environment variables):
 | `NUMWARS_OUTPUT`         | table   | Human-readable `table` or machine-readable `json`, Python |
 | `NUMWARS_SCIPY`          | false   | Whether the Python `similarity` suite also times SciPy    |
 
+Every suite here runs on CPU, so both harnesses refuse `NUMWARS_DEVICES` rather than ignoring it.
+GPU device selection lives in NumKong's own native benchmarks, where `NUMWARS_DEVICES=cuda:0,rocm:1` names vendor-local ordinals and gives each device its own row.
+Without that variable the native runner takes device zero of every compiled backend.
+
 The Python suites read the same variables, and take no flags.
 An empty variable counts as unset, and a value that does not parse stops the run.
 

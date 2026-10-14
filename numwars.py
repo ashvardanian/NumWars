@@ -150,6 +150,10 @@ class Settings:
 
 def read_settings() -> Settings:
     """Reads every `NUMWARS_*` variable, exiting with status 1 on the first that does not parse."""
+    if env_text("NUMWARS_DEVICES"):
+        raise SystemExit(
+            "NUMWARS_DEVICES is unsupported by these CPU suites; GPU device selection lives in NumKong's native benchmarks"
+        )
     filter = env_text("NUMWARS_FILTER") or ""
     try:
         filter_pattern = re.compile(filter) if filter else None

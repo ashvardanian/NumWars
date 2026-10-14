@@ -134,6 +134,12 @@ impl Settings {
     /// Reads every `NUMWARS_*` variable, exiting with status 1 on the first that does not parse,
     /// and prints each as "- Name: value".
     pub fn read() -> Self {
+        if env_text("NUMWARS_DEVICES").is_some() {
+            eprintln!(
+                "NUMWARS_DEVICES is unsupported by these CPU suites; GPU device selection lives in NumKong's native benchmarks"
+            );
+            std::process::exit(1);
+        }
         let filter = env_text("NUMWARS_FILTER").unwrap_or_default();
         let settings = Settings {
             filter_pattern: (!filter.is_empty()).then(|| regex::Regex::new(&filter).ok()).flatten(),
