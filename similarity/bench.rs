@@ -30,7 +30,7 @@ use criterion::measurement::WallTime;
 use criterion::{BenchmarkGroup, Criterion, Throughput};
 use num_traits::{Float, Num, NumCast};
 use numkong::{
-    bf16, capabilities, e2m3, e3m2, e4m3, e5m2, f16, u1x8, Angular, Dot, Euclidean, Hamming, Jaccard, JensenShannon,
+    bf16, e2m3, e3m2, e4m3, e5m2, f16, u1x8, Angular, Capabilities, Dot, Euclidean, Hamming, Jaccard, JensenShannon,
     KullbackLeibler,
 };
 
@@ -1139,7 +1139,9 @@ mod tests {
 
 fn main() {
     let settings = Settings::read();
-    capabilities::configure_thread();
+    Capabilities::cpu_enabled()
+        .configure_thread()
+        .expect("Failed to configure the thread");
     let mut criterion = numwars::configure_criterion(&settings);
     bench_dot(&mut criterion, &settings);
     bench_angular(&mut criterion, &settings);

@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
-Mesh alignment benchmarks: NumKong vs Python alternatives.
+Many-to-many shape distance benchmarks: NumKong vs Python alternatives.
 
-Benchmarks RMSD and Kabsch alignment over 3D point clouds:
-- NumKong: nk.rmsd / nk.kabsch
-- NumPy: manual RMSD via array ops
-- BioPython: SVDSuperimposer (Kabsch)
+Scores every row cloud against every column cloud with the correspondence-free distances that
+replaced mesh alignment. Clouds pack once, outside the timed loop, centered and rotated onto their
+principal axes, and every kind takes the best of the 8 sign flips of those axes:
+- chamfers and hausdorffs: against SciPy's cKDTree over the same principal frames and flips
+- wassersteinprocrustes: NumKong only, as no Python library alternates exact transport with Kabsch
+- gromovwassersteins: against POT's gromov_wasserstein2 over the same distance matrices
 
 Can be run with uv:
-    uv run --with numkong,numpy,biopython,tabulate mesh/bench.py
+    uv run --with numkong,numpy,scipy,pot,tabulate mesh/bench.py
 
 Or with traditional pip:
     pip install -e ".[mesh]"
@@ -18,14 +20,16 @@ Or with traditional pip:
 import json
 import sys
 from dataclasses import dataclass
+from functools import partial
 
 import numpy as np
+from scipy.spatial import cKDTree
+from scipy.spatial.distance import cdist
 
 from numwars import (
-    Settings,
     calculate_mps,
     measure_average_duration,
-    normalize_dtype_name,
+    parse_numpy_dtype,
     print_results_table,
     print_settings,
     read_settings,
@@ -37,6 +41,15 @@ except ImportError:
     print("Error: numkong not found. Install with: pip install numkong")
     sys.exit(1)
 
+try:
+    import ot
+except ImportError:
+    ot = None
+
+CLOUD_COUNT = 8
+KINDS = ("chamfers", "hausdorffs", "wassersteinprocrustes", "gromovwassersteins")
+SIGN_FLIPS = [np.array([-1.0 if flip >> axis & 1 else 1.0 for axis in range(3)]) for flip in range(8)]
+
 
 @dataclass
 class BenchmarkResult:
@@ -45,143 +58,103 @@ class BenchmarkResult:
     input_dtype: str
     output_dtype: str
     count: int
+    points: int
     duration_secs: float
     primary_value: float
 
 
-def build_point_clouds(count: int, seed: int, dtype=np.float32) -> tuple[np.ndarray, np.ndarray]:
-    """Generate two random (N, 3) point clouds of the given dtype."""
-    rng = np.random.default_rng(seed)
-    source = rng.standard_normal((count, 3)).astype(dtype)
-    target = rng.standard_normal((count, 3)).astype(dtype)
-    return source, target
+def build_clouds(points: int, dtype_str: str, rng: np.random.Generator) -> list[np.ndarray]:
+    """`CLOUD_COUNT` standard-normal clouds of shape [points,3]."""
+    return [rng.standard_normal((points, 3)).astype(parse_numpy_dtype(dtype_str)) for _ in range(CLOUD_COUNT)]
 
 
-def benchmark_numkong_rmsd(
-    source: np.ndarray,
-    target: np.ndarray,
-    settings: Settings,
-) -> BenchmarkResult:
-    count = source.shape[0]
-    duration = measure_average_duration(
-        lambda: nk.rmsd(source, target),
-        settings,
+def principal_frame(cloud: np.ndarray) -> np.ndarray:
+    """Centers `cloud` and rotates it onto its principal axes in descending spread, as NumKong packs it."""
+    centered = cloud.astype(np.float64) - cloud.astype(np.float64).mean(axis=0)
+    _, eigenvectors = np.linalg.eigh(centered.T @ centered)
+    return centered @ eigenvectors[:, ::-1]
+
+
+def scipy_distance(workload: str, a: np.ndarray, b: np.ndarray, a_tree: cKDTree, b_tree: cKDTree) -> float:
+    """Chamfer or Hausdorff distance between two principal frames, the best of the 8 sign flips."""
+    best = np.inf
+    for signs in SIGN_FLIPS:
+        # A flip is its own inverse, so each direction flips the points it queries
+        forward, reverse = b_tree.query(a * signs)[0], a_tree.query(b * signs)[0]
+        if workload == "chamfers":
+            best = min(best, (forward.mean() + reverse.mean()) / 2)
+        else:
+            best = min(best, max(forward.max(), reverse.max()))
+    return best
+
+
+def pairwise(rows: list, columns: list, distance) -> np.ndarray:
+    """The [rows,columns] matrix of `distance` from every row to every column."""
+    return np.array([[distance(row, column) for column in columns] for row in rows])
+
+
+def build_candidates(dtype_str: str, points: int, rng: np.random.Generator) -> list[tuple]:
+    """Every (workload, library, output dtype, callable) row over one tile of fresh clouds."""
+    rows, columns = build_clouds(points, dtype_str, rng), build_clouds(points, dtype_str, rng)
+    row_pack, column_pack = nk.shapes_pack(rows), nk.shapes_pack(columns)
+    output_dtype = {"f32": "f64", "f16": "f32"}[dtype_str]
+    candidates = [
+        (kind, "NumKong", output_dtype, partial(getattr(nk, f"{kind}_packed"), row_pack, column_pack)) for kind in KINDS
+    ]
+
+    row_frames, column_frames = (
+        [principal_frame(cloud) for cloud in rows],
+        [principal_frame(cloud) for cloud in columns],
     )
-    return BenchmarkResult(
-        workload="rmsd",
-        library="NumKong",
-        input_dtype=normalize_dtype_name(source.dtype),
-        output_dtype="f64",
-        count=count,
-        duration_secs=duration,
-        primary_value=calculate_mps(count, duration),
-    )
+    row_trees, column_trees = [cKDTree(frame) for frame in row_frames], [cKDTree(frame) for frame in column_frames]
+    for kind in ("chamfers", "hausdorffs"):
+        candidates.append(
+            (
+                kind,
+                "SciPy",
+                "f64",
+                lambda kind=kind: pairwise(
+                    list(zip(row_frames, row_trees)),
+                    list(zip(column_frames, column_trees)),
+                    lambda row, column: scipy_distance(kind, row[0], column[0], row[1], column[1]),
+                ),
+            )
+        )
+    if ot is not None:
+        row_distances = [cdist(frame, frame) for frame in row_frames]
+        column_distances = [cdist(frame, frame) for frame in column_frames]
+        weights = np.full(points, 1 / points)
+        candidates.append(
+            (
+                "gromovwassersteins",
+                "POT",
+                "f64",
+                lambda: pairwise(
+                    row_distances,
+                    column_distances,
+                    lambda row, column: ot.gromov.gromov_wasserstein2(row, column, weights, weights, "square_loss"),
+                ),
+            )
+        )
+    return candidates
 
 
-def benchmark_numpy_rmsd(
-    source: np.ndarray,
-    target: np.ndarray,
-    settings: Settings,
-) -> BenchmarkResult:
-    count = source.shape[0]
-    duration = measure_average_duration(
-        lambda: np.sqrt(np.mean(np.sum((source - target) ** 2, axis=1))),
-        settings,
-    )
-    return BenchmarkResult(
-        workload="rmsd",
-        library="NumPy",
-        input_dtype=normalize_dtype_name(source.dtype),
-        output_dtype="f64",
-        count=count,
-        duration_secs=duration,
-        primary_value=calculate_mps(count, duration),
-    )
-
-
-def benchmark_numkong_kabsch(
-    source: np.ndarray,
-    target: np.ndarray,
-    settings: Settings,
-) -> BenchmarkResult:
-    count = source.shape[0]
-    duration = measure_average_duration(
-        lambda: nk.kabsch(source, target),
-        settings,
-    )
-    return BenchmarkResult(
-        workload="kabsch",
-        library="NumKong",
-        input_dtype=normalize_dtype_name(source.dtype),
-        output_dtype="f64",
-        count=count,
-        duration_secs=duration,
-        primary_value=calculate_mps(count, duration),
-    )
-
-
-def benchmark_biopython_kabsch(
-    source: np.ndarray,
-    target: np.ndarray,
-    settings: Settings,
-) -> BenchmarkResult:
-    try:
-        from Bio.SVDSuperimposer import SVDSuperimposer
-    except ImportError:
-        print("Warning: biopython not found, skipping biopython kabsch benchmark.")
-        return None
-
-    sup = SVDSuperimposer()
-    count = source.shape[0]
-
-    def run_once():
-        sup.set(target, source)
-        sup.run()
-
-    duration = measure_average_duration(run_once, settings)
-    return BenchmarkResult(
-        workload="kabsch",
-        library="BioPython",
-        input_dtype=normalize_dtype_name(source.dtype),
-        output_dtype="f64",
-        count=count,
-        duration_secs=duration,
-        primary_value=calculate_mps(count, duration),
-    )
-
-
-def benchmark_numkong_umeyama(
-    source: np.ndarray,
-    target: np.ndarray,
-    settings: Settings,
-) -> BenchmarkResult:
-    count = source.shape[0]
-    duration = measure_average_duration(
-        lambda: nk.umeyama(source, target),
-        settings,
-    )
-    return BenchmarkResult(
-        workload="umeyama",
-        library="NumKong",
-        input_dtype=normalize_dtype_name(source.dtype),
-        output_dtype="f64",
-        count=count,
-        duration_secs=duration,
-        primary_value=calculate_mps(count, duration),
-    )
+def benchmark_id(workload: str, library: str, input_dtype: str, points: int) -> str:
+    return f"mesh/{workload}/{library.lower()}/{input_dtype}/{CLOUD_COUNT}x{CLOUD_COUNT}x{points}"
 
 
 def result_to_entry(result: BenchmarkResult) -> dict:
     return {
         "suite": "mesh",
         "workload": result.workload,
-        "benchmark_id": f"mesh/{result.workload}/{result.library.lower()}/{result.input_dtype}",
+        "benchmark_id": benchmark_id(result.workload, result.library, result.input_dtype, result.points),
         "library": result.library,
         "dtype": result.input_dtype,
         "input_dtype": result.input_dtype,
         "output_dtype": result.output_dtype,
         "display_signature": f"{result.input_dtype} \u2192 {result.output_dtype}",
         "count": result.count,
+        "points": result.points,
         "primary_value": result.primary_value,
         "unit": "MP/s",
         "duration_secs": result.duration_secs,
@@ -192,59 +165,26 @@ def main() -> None:
     settings = read_settings()
     if settings.output == "table":
         print_settings(settings)
-    count = settings.batch_size
+    points = settings.shape_points
+    count = CLOUD_COUNT * CLOUD_COUNT
 
-    source, target = build_point_clouds(count, settings.seed)
-    source64, target64 = build_point_clouds(count, settings.seed, dtype=np.float64)
-    benchmarks = [
-        (
-            "mesh/rmsd/numkong/f32",
-            lambda: benchmark_numkong_rmsd(source, target, settings),
-        ),
-        (
-            "mesh/rmsd/numkong/f64",
-            lambda: benchmark_numkong_rmsd(source64, target64, settings),
-        ),
-        (
-            "mesh/rmsd/numpy/f32",
-            lambda: benchmark_numpy_rmsd(source, target, settings),
-        ),
-        (
-            "mesh/rmsd/numpy/f64",
-            lambda: benchmark_numpy_rmsd(source64, target64, settings),
-        ),
-        (
-            "mesh/kabsch/numkong/f32",
-            lambda: benchmark_numkong_kabsch(source, target, settings),
-        ),
-        (
-            "mesh/kabsch/numkong/f64",
-            lambda: benchmark_numkong_kabsch(source64, target64, settings),
-        ),
-        (
-            "mesh/kabsch/biopython/f32",
-            lambda: benchmark_biopython_kabsch(source, target, settings),
-        ),
-        (
-            "mesh/kabsch/biopython/f64",
-            lambda: benchmark_biopython_kabsch(source64, target64, settings),
-        ),
-        (
-            "mesh/umeyama/numkong/f32",
-            lambda: benchmark_numkong_umeyama(source, target, settings),
-        ),
-        (
-            "mesh/umeyama/numkong/f64",
-            lambda: benchmark_numkong_umeyama(source64, target64, settings),
-        ),
-    ]
-
+    rng = np.random.default_rng(settings.seed)
     results = []
-    for benchmark_id, benchmark_fn in benchmarks:
-        if not settings.selects(benchmark_id):
-            continue
-        result = benchmark_fn()
-        if result is not None:
+    for input_dtype in ("f32", "f16"):
+        for workload, library, output_dtype, func in build_candidates(input_dtype, points, rng):
+            if not settings.selects(benchmark_id(workload, library, input_dtype, points)):
+                continue
+            duration = measure_average_duration(func, settings)
+            result = BenchmarkResult(
+                workload=workload,
+                library=library,
+                input_dtype=input_dtype,
+                output_dtype=output_dtype,
+                count=count,
+                points=points,
+                duration_secs=duration,
+                primary_value=calculate_mps(count, duration),
+            )
             results.append(result_to_entry(result))
 
     if settings.output == "json":

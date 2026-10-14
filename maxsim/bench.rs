@@ -5,7 +5,7 @@
 //!
 //! Competitors:
 //! - numkong (MaxSimPackedMatrix::score on pre-packed tensors)
-//! - ndarray (matmul-based: Q @ D.T then row-wise max + sum)
+//! - ndarray (matmul-based: Q × Dᵀ, then a row-wise max and sum)
 //!
 //! Run with:
 //! ```bash
@@ -22,7 +22,7 @@ use criterion::measurement::WallTime;
 use criterion::{BenchmarkGroup, Criterion, Throughput};
 use ndarray::Array2;
 use numkong::prelude::*;
-use numkong::{bf16, capabilities, f16, MaxSim, MaxSimPackedMatrix};
+use numkong::{bf16, f16, Capabilities, MaxSim, MaxSimPackedMatrix};
 
 use numwars::Settings;
 
@@ -48,14 +48,13 @@ fn run_numkong<T: MaxSim + Clone>(
     dc: usize,
     dim: usize,
 ) {
-    let query_tensor = Tensor::<T>::try_from_slice(query_vectors, &[qc, dim]).expect("Failed to create query tensor");
+    let query_tensor = Tensor::<T>::from_slice(query_vectors, &[qc, dim]).expect("Failed to create query tensor");
     let document_tensor =
-        Tensor::<T>::try_from_slice(document_vectors, &[dc, dim]).expect("Failed to create document tensor");
-    let packed_queries = MaxSimPackedMatrix::<T>::try_pack(&query_tensor.view()).expect("Failed to pack queries");
-    let packed_documents =
-        MaxSimPackedMatrix::<T>::try_pack(&document_tensor.view()).expect("Failed to pack documents");
+        Tensor::<T>::from_slice(document_vectors, &[dc, dim]).expect("Failed to create document tensor");
+    let packed_queries = MaxSimPackedMatrix::<T>::new(&query_tensor.view()).expect("Failed to pack queries");
+    let packed_documents = MaxSimPackedMatrix::<T>::new(&document_tensor.view()).expect("Failed to pack documents");
     group.bench_function("numkong", |bench| {
-        bench.iter(|| black_box(packed_queries.try_score(&packed_documents).expect("scoring failed")))
+        bench.iter(|| black_box(packed_queries.score(&packed_documents).expect("scoring failed")))
     });
 }
 
@@ -173,7 +172,9 @@ pub fn bench_maxsim(c: &mut Criterion, settings: &Settings) {
 
 fn main() {
     let settings = Settings::read();
-    capabilities::configure_thread();
+    Capabilities::cpu_enabled()
+        .configure_thread()
+        .expect("Failed to configure the thread");
     let mut criterion = numwars::configure_criterion(&settings);
     bench_maxsim(&mut criterion, &settings);
     criterion.final_summary();

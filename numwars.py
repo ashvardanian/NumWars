@@ -11,6 +11,7 @@ NUMWARS_DIMS            1536     Vector length
 NUMWARS_DIMS_HEIGHT     1024     Rows of `C = A @ B.T` in GEMM-shaped suites
 NUMWARS_DIMS_WIDTH      128      Columns of `C = A @ B.T` in GEMM-shaped suites
 NUMWARS_DIMS_DEPTH      1536     Shared dimension of `A` and `B` in GEMM-shaped suites
+NUMWARS_SHAPE_POINTS    32       Points per cloud in the shape-distance suite
 NUMWARS_OUTPUT          table    Human-readable `table` or machine-readable `json`
 NUMWARS_SCIPY           false    Whether the `similarity` suite also times SciPy
 """
@@ -136,6 +137,7 @@ class Settings:
     dims_height: int
     dims_width: int
     dims_depth: int
+    shape_points: int
     output: str
 
     def selects(self, name: str) -> bool:
@@ -171,6 +173,7 @@ def read_settings() -> Settings:
         dims_height=env_count("NUMWARS_DIMS_HEIGHT", 1024),
         dims_width=env_count("NUMWARS_DIMS_WIDTH", 128),
         dims_depth=env_count("NUMWARS_DIMS_DEPTH", 1536),
+        shape_points=env_count("NUMWARS_SHAPE_POINTS", 32),
         output=env_parsed("NUMWARS_OUTPUT", "table", {"table": "table", "json": "json"}.get, "table or json"),
     )
 
@@ -187,6 +190,7 @@ def print_settings(settings: Settings) -> None:
     print(f"- Dims height: {settings.dims_height}")
     print(f"- Dims width: {settings.dims_width}")
     print(f"- Dims depth: {settings.dims_depth}")
+    print(f"- Shape points: {settings.shape_points}")
     print(f"- Output: {settings.output}")
 
 

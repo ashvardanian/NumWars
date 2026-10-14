@@ -4,6 +4,8 @@ All-pairs similarity matrix benchmarks: NumKong vs SciPy.
 
 Computes pairwise distance matrices using packed kernels (angulars_packed / euclideans_packed) for NumKong and cdist for SciPy. Both libraries produce (batch_size, batch_size) output matrices.
 
+The SYRK rows score one matrix against itself, A × Aᵀ, with the `*_symmetric` kernels filling the upper triangle for NumKong and `pdist` returning the condensed upper triangle for SciPy, and count only the n(n+1)/2 pairs of that triangle times the depth.
+
 Can be run with uv:
     uv run --with numkong,numpy,scipy,tabulate similarities/bench.py
 
@@ -76,10 +78,29 @@ def build_matrices(batch_size: int, ndim: int, dtype_str: str, seed: int):
     return A, B
 
 
+def build_bits(batch_size: int, ndim: int, seed: int) -> np.ndarray:
+    """Build a random (batch_size, ndim) matrix of zeros and ones, one byte per bit."""
+    return np.random.default_rng(seed).integers(0, 2, size=(batch_size, ndim), dtype=np.uint8)
+
+
+def symmetric_operations(batch_size: int, ndim: int) -> int:
+    """Credits only the n(n+1)/2 pairs of one triangle, times the depth."""
+    return batch_size * (batch_size + 1) // 2 * ndim
+
+
 # Map from our metric names to scipy metric names
 SCIPY_METRIC_MAP = {
     "angular": "cosine",
     "euclidean": "euclidean",
+    "hamming": "hamming",
+    "jaccard": "jaccard",
+}
+
+SYMMETRIC_KERNELS = {
+    "angular": nk.angulars_symmetric,
+    "euclidean": nk.euclideans_symmetric,
+    "hamming": nk.hammings_symmetric,
+    "jaccard": nk.jaccards_symmetric,
 }
 
 
@@ -137,7 +158,7 @@ def benchmark_numkong(
     out_tensor = nk.Tensor(out_array, dtype=numkong_dtype_name(out_dtype))
 
     duration = measure_average_duration(
-        lambda: func(A, B_packed, out=out_tensor),
+        lambda: func(A, B_packed, out=out_tensor, threads=settings.threads),
         settings,
     )
     num_operations = batch_size * batch_size * ndim
@@ -154,13 +175,74 @@ def benchmark_numkong(
     )
 
 
+def benchmark_scipy_symmetric(metric: str, batch_size: int, ndim: int, settings: Settings) -> BenchmarkResult:
+    if metric in ("hamming", "jaccard"):
+        vectors, input_dtype = build_bits(batch_size, ndim, settings.seed).astype(bool), "bool"
+    else:
+        vectors, input_dtype = build_matrices(batch_size, ndim, "f32", settings.seed)[0], "f32"
+    out = np.empty(batch_size * (batch_size - 1) // 2, dtype=np.float64)
+    scipy_metric = SCIPY_METRIC_MAP[metric]
+
+    duration = measure_average_duration(
+        lambda: spd.pdist(vectors, scipy_metric, out=out),
+        settings,
+    )
+    return BenchmarkResult(
+        library="SciPy",
+        metric=f"symmetric/{metric}",
+        input_dtype=input_dtype,
+        output_dtype="f64",
+        display_signature=display_signature_name(input_dtype, "f64"),
+        ndim=ndim,
+        batch_size=batch_size,
+        duration_secs=duration,
+        gso_per_sec=calculate_gso_per_sec(symmetric_operations(batch_size, ndim), duration),
+    )
+
+
+def benchmark_numkong_symmetric(
+    metric: str,
+    batch_size: int,
+    ndim: int,
+    dtype_str: str,
+    settings: Settings,
+) -> BenchmarkResult:
+    if metric in ("hamming", "jaccard"):
+        vectors, dtype = np.packbits(build_bits(batch_size, ndim, settings.seed), axis=1), "uint1"
+    else:
+        vectors, dtype = build_matrices(batch_size, ndim, dtype_str, settings.seed)[0], numkong_dtype_name(dtype_str)
+    func = SYMMETRIC_KERNELS[metric]
+
+    # Discover output dtype from a warm-up call
+    sample = func(vectors, dtype=dtype)
+    out_dtype = normalize_dtype_name(getattr(sample, "dtype", "f32"))
+    out_array = np.empty((batch_size, batch_size), dtype=parse_numpy_dtype(out_dtype))
+    out_tensor = nk.Tensor(out_array, dtype=numkong_dtype_name(out_dtype))
+
+    duration = measure_average_duration(
+        lambda: func(vectors, dtype=dtype, out=out_tensor, threads=settings.threads),
+        settings,
+    )
+    return BenchmarkResult(
+        library="NumKong",
+        metric=f"symmetric/{metric}",
+        input_dtype=dtype_str,
+        output_dtype=out_dtype,
+        display_signature=display_signature_name(dtype_str, out_dtype),
+        ndim=ndim,
+        batch_size=batch_size,
+        duration_secs=duration,
+        gso_per_sec=calculate_gso_per_sec(symmetric_operations(batch_size, ndim), duration),
+    )
+
+
 def result_to_entry(result: BenchmarkResult) -> dict:
     return {
         "suite": "similarities",
         "workload": result.metric,
         "benchmark_id": f"similarities/{result.metric}/{result.library.lower()}/{result.input_dtype}",
         "library": result.library,
-        "metric": result.metric,
+        "metric": result.metric.removeprefix("symmetric/"),
         "dtype": result.input_dtype,
         "input_dtype": result.input_dtype,
         "output_dtype": result.output_dtype,
@@ -191,26 +273,45 @@ def main():
 
     candidates = [
         ("numkong", "angular", "f32"),
+        ("numkong", "symmetric/angular", "f32"),
         ("numkong", "angular", "bf16"),
+        ("numkong", "symmetric/angular", "bf16"),
         ("numkong", "angular", "i8"),
+        ("numkong", "symmetric/angular", "i8"),
         ("numkong", "angular", "u8"),
+        ("numkong", "symmetric/angular", "u8"),
         ("scipy", "angular", "f32"),
+        ("scipy", "symmetric/angular", "f32"),
         ("numkong", "euclidean", "f32"),
+        ("numkong", "symmetric/euclidean", "f32"),
         ("numkong", "euclidean", "bf16"),
+        ("numkong", "symmetric/euclidean", "bf16"),
         ("numkong", "euclidean", "i8"),
+        ("numkong", "symmetric/euclidean", "i8"),
         ("numkong", "euclidean", "u8"),
+        ("numkong", "symmetric/euclidean", "u8"),
         ("scipy", "euclidean", "f32"),
+        ("scipy", "symmetric/euclidean", "f32"),
+        ("numkong", "symmetric/hamming", "u1"),
+        ("scipy", "symmetric/hamming", "bool"),
+        ("numkong", "symmetric/jaccard", "u1"),
+        ("scipy", "symmetric/jaccard", "bool"),
     ]
 
     all_results: list[BenchmarkResult] = []
-    for library_slug, metric, dtype in candidates:
-        benchmark_name = f"similarities/{metric}/{library_slug}/{dtype}"
+    for library_slug, workload, dtype in candidates:
+        benchmark_name = f"similarities/{workload}/{library_slug}/{dtype}"
         if not settings.selects(benchmark_name):
             continue
         if settings.output == "table":
             print(f"Benchmarking {benchmark_name}")
+        metric = workload.removeprefix("symmetric/")
         try:
-            if library_slug == "numkong":
+            if workload != metric and library_slug == "numkong":
+                all_results.append(benchmark_numkong_symmetric(metric, batch_size, ndim, dtype, settings))
+            elif workload != metric:
+                all_results.append(benchmark_scipy_symmetric(metric, batch_size, ndim, settings))
+            elif library_slug == "numkong":
                 all_results.append(benchmark_numkong(metric, batch_size, ndim, dtype, settings))
             else:
                 all_results.append(benchmark_scipy(metric, batch_size, ndim, settings))
@@ -236,12 +337,17 @@ def main():
         return
 
     print()
-    print(f"All-pairs similarity: A({batch_size}x{ndim}) vs B({batch_size}x{ndim}) -> ({batch_size}x{batch_size})")
+    print(f"GEMM similarity: A({batch_size}×{ndim}) × Bᵀ({ndim}×{batch_size}) → C({batch_size}×{batch_size})")
+    print(
+        f"SYRK similarity: A({batch_size}×{ndim}) × Aᵀ({ndim}×{batch_size}) → C({batch_size}×{batch_size}), "
+        "counting one triangle"
+    )
     print()
     table_rows = [
         {
             "Library": result.library,
-            "Metric": result.metric,
+            "Kernel": "SYRK" if result.metric.startswith("symmetric/") else "GEMM",
+            "Metric": result.metric.removeprefix("symmetric/"),
             "Precision": result.display_signature,
             "GSO/s": f"{result.gso_per_sec:.2f}",
             "Time": format_duration(result.duration_secs),

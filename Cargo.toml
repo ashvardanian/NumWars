@@ -17,10 +17,10 @@ path = "numwars.rs"
 
 [dependencies]
 criterion = {version = "0.8", default-features = false}
-forkunion = {version = "3.0", optional = true}
+forkunion = {version = "4.0.0-rc.1", optional = true}
 half = {version = "2.4", optional = true}
 num-traits = {version = "0.2", optional = true}
-numkong = {version = "7.7.1", default-features = false}
+numkong = {version = "8.0.0-rc.1", default-features = false}
 rand = {version = "0.10", optional = true}
 regex = "1.11"
 
@@ -40,7 +40,7 @@ wide = {version = "1.1", optional = true}
 
 [features]
 all = ["bench_similarity", "bench_each", "bench_dots", "bench_geospatial", "bench_similarities", "bench_maxsim", "bench_reduce", "bench_mesh", "bench_attention"]
-bench_attention = ["half", "numkong/parallel", "dep:candle-core", "dep:candle-nn"]
+bench_attention = ["half", "numkong/parallel", "forkunion", "dep:candle-core", "dep:candle-nn"]
 bench_dots = [
   "rand",
   "ndarray",
@@ -59,8 +59,8 @@ bench_dots = [
 bench_each = ["rand", "num-traits", "half", "ndarray", "nalgebra"]
 bench_geospatial = ["rand", "num-traits", "geo"]
 bench_maxsim = ["rand", "num-traits", "half", "ndarray", "nalgebra"]
-bench_mesh = ["rand", "num-traits", "half", "nalgebra"]
-bench_reduce = ["rand", "num-traits", "ndarray", "polars"]
+bench_mesh = ["rand", "nalgebra"]
+bench_reduce = ["rand", "num-traits", "ndarray", "polars", "argminmax"]
 bench_similarities = [
   "rand",
   "half",

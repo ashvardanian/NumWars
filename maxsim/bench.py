@@ -193,7 +193,7 @@ def main():
         print("No benchmarks were run.")
         return
 
-    print(f"MaxSim scoring: Q({height}x{depth}) vs D({width}x{depth})")
+    print(f"MaxSim scoring: Q({height}×{depth}) vs D({width}×{depth})")
     print()
     table_rows = [
         {

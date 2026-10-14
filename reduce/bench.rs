@@ -1,25 +1,26 @@
 //! Benchmark for reduction operations
 //!
-//! Compares NumKong vs baseline Rust implementations, ndarray, and polars for
-//! reduction operations: sum and row-wise norms.
+//! Compares NumKong vs baseline Rust implementations, ndarray, polars and argminmax for
+//! reduction operations: sum, min and max with their indices, and row-wise norms.
 //!
 //! Run with:
 //! ```bash
 //! cargo bench --features bench_reduce --bench bench_reduce
-//! NUMWARS_FILTER="sum" cargo bench --features bench_reduce
+//! NUMWARS_FILTER="sum|minmax" cargo bench --features bench_reduce
 //! ```
 //!
 //! Benchmark naming: reduce/{operation}/{dtype}
-//! Examples: reduce/sum/f32, reduce/row_norms/f64
+//! Examples: reduce/sum/f32, reduce/minmax/u8, reduce/row_norms/f64
 
 use std::hint::black_box;
 use std::iter::Sum;
 
+use argminmax::ArgMinMax;
 use criterion::measurement::WallTime;
 use criterion::{BenchmarkGroup, Criterion, Throughput};
 use ndarray::{Array1, Array2};
 use num_traits::Float;
-use numkong::{bf16, capabilities, f16, Dot, FloatLike, ReduceMoments};
+use numkong::{bf16, f16, Capabilities, Dot, FloatLike, ReduceMinMax, ReduceMoments};
 use polars::prelude::*;
 
 use numwars::Settings;
@@ -29,12 +30,14 @@ use numwars::Settings;
 #[derive(Clone, Copy)]
 enum ReduceOp {
     Sum,
+    MinMax,
 }
 
 impl ReduceOp {
     fn slug(self) -> &'static str {
         match self {
             ReduceOp::Sum => "sum",
+            ReduceOp::MinMax => "minmax",
         }
     }
 }
@@ -45,6 +48,20 @@ impl ReduceOp {
 
 fn baseline_sum<T: Copy + Sum>(data: &[T]) -> T {
     data.iter().copied().sum()
+}
+
+/// The indices of the first smallest and the first largest element.
+fn baseline_minmax<T: Copy + PartialOrd>(data: &[T]) -> (usize, usize) {
+    let (mut smallest, mut largest) = (0, 0);
+    for (index, value) in data.iter().enumerate() {
+        if *value < data[smallest] {
+            smallest = index;
+        }
+        if *value > data[largest] {
+            largest = index;
+        }
+    }
+    (smallest, largest)
 }
 
 fn baseline_row_norms_float<T: Float + Sum>(data: &[T], output: &mut [T], batch_size: usize, ndim: usize) {
@@ -68,6 +85,9 @@ impl RunBaseline for f32 {
             ReduceOp::Sum => {
                 group.bench_function("baseline", |bench| bench.iter(|| black_box(baseline_sum(data))));
             }
+            ReduceOp::MinMax => {
+                group.bench_function("baseline", |bench| bench.iter(|| black_box(baseline_minmax(data))));
+            }
         }
     }
 }
@@ -77,6 +97,9 @@ impl RunBaseline for f64 {
         match op {
             ReduceOp::Sum => {
                 group.bench_function("baseline", |bench| bench.iter(|| black_box(baseline_sum(data))));
+            }
+            ReduceOp::MinMax => {
+                group.bench_function("baseline", |bench| bench.iter(|| black_box(baseline_minmax(data))));
             }
         }
     }
@@ -96,6 +119,9 @@ impl RunBaseline for u8 {
                     })
                 });
             }
+            ReduceOp::MinMax => {
+                group.bench_function("baseline", |bench| bench.iter(|| black_box(baseline_minmax(data))));
+            }
         }
     }
 }
@@ -106,18 +132,53 @@ trait RunNumKong: Sized {
     fn run(_op: ReduceOp, _group: &mut BenchmarkGroup<'_, WallTime>, _data: &[Self]) {}
 }
 
-impl<T: ReduceMoments> RunNumKong for T {
+impl<T: ReduceMoments + ReduceMinMax> RunNumKong for T {
     fn run(op: ReduceOp, group: &mut BenchmarkGroup<'_, WallTime>, data: &[Self]) {
         let stride = std::mem::size_of::<T>();
         match op {
             ReduceOp::Sum => {
                 group.bench_function("numkong", |bench| {
-                    bench.iter(|| black_box(T::reduce_moments(data, stride).0))
+                    bench.iter(|| black_box(T::reduce_moments(data, stride).expect("reduce_moments failed").0))
+                });
+            }
+            ReduceOp::MinMax => {
+                group.bench_function("numkong", |bench| {
+                    bench.iter(|| black_box(T::reduce_minmax(data, stride).expect("reduce_minmax failed")))
                 });
             }
         }
     }
 }
+
+trait RunArgMinMax: Sized {
+    fn run(_op: ReduceOp, _group: &mut BenchmarkGroup<'_, WallTime>, _data: &[Self]) {}
+}
+
+impl RunArgMinMax for f32 {
+    fn run(op: ReduceOp, group: &mut BenchmarkGroup<'_, WallTime>, data: &[f32]) {
+        if let ReduceOp::MinMax = op {
+            group.bench_function("argminmax", |bench| bench.iter(|| black_box(data.argminmax())));
+        }
+    }
+}
+
+impl RunArgMinMax for f64 {
+    fn run(op: ReduceOp, group: &mut BenchmarkGroup<'_, WallTime>, data: &[f64]) {
+        if let ReduceOp::MinMax = op {
+            group.bench_function("argminmax", |bench| bench.iter(|| black_box(data.argminmax())));
+        }
+    }
+}
+
+impl RunArgMinMax for u8 {
+    fn run(op: ReduceOp, group: &mut BenchmarkGroup<'_, WallTime>, data: &[u8]) {
+        if let ReduceOp::MinMax = op {
+            group.bench_function("argminmax", |bench| bench.iter(|| black_box(data.argminmax())));
+        }
+    }
+}
+
+impl RunArgMinMax for bf16 {}
 
 trait RunNdarray: Sized {
     fn run(_op: ReduceOp, _group: &mut BenchmarkGroup<'_, WallTime>, _data: &[Self]) {}
@@ -126,10 +187,8 @@ trait RunNdarray: Sized {
 impl RunNdarray for f32 {
     fn run(op: ReduceOp, group: &mut BenchmarkGroup<'_, WallTime>, data: &[f32]) {
         let array = Array1::from_vec(data.to_vec());
-        match op {
-            ReduceOp::Sum => {
-                group.bench_function("ndarray", |bench| bench.iter(|| black_box(array.sum())));
-            }
+        if let ReduceOp::Sum = op {
+            group.bench_function("ndarray", |bench| bench.iter(|| black_box(array.sum())));
         }
     }
 }
@@ -137,10 +196,8 @@ impl RunNdarray for f32 {
 impl RunNdarray for f64 {
     fn run(op: ReduceOp, group: &mut BenchmarkGroup<'_, WallTime>, data: &[f64]) {
         let array = Array1::from_vec(data.to_vec());
-        match op {
-            ReduceOp::Sum => {
-                group.bench_function("ndarray", |bench| bench.iter(|| black_box(array.sum())));
-            }
+        if let ReduceOp::Sum = op {
+            group.bench_function("ndarray", |bench| bench.iter(|| black_box(array.sum())));
         }
     }
 }
@@ -157,6 +214,10 @@ impl RunPolars for f32 {
         let chunked = Float32Chunked::from_slice("data".into(), data);
         let _ = match op {
             ReduceOp::Sum => group.bench_function("polars", |bench| bench.iter(|| black_box(chunked.sum()))),
+            // Values only: `arg_min` and `arg_max` need a Polars feature this build leaves off
+            ReduceOp::MinMax => group.bench_function("polars", |bench| {
+                bench.iter(|| black_box((chunked.min(), chunked.max())))
+            }),
         };
     }
 }
@@ -166,6 +227,9 @@ impl RunPolars for f64 {
         let chunked = Float64Chunked::from_slice("data".into(), data);
         let _ = match op {
             ReduceOp::Sum => group.bench_function("polars", |bench| bench.iter(|| black_box(chunked.sum()))),
+            ReduceOp::MinMax => group.bench_function("polars", |bench| {
+                bench.iter(|| black_box((chunked.min(), chunked.max())))
+            }),
         };
     }
 }
@@ -179,7 +243,7 @@ impl RunPolars for bf16 {}
 
 fn bench_reduce_op_dtype<T>(c: &mut Criterion, settings: &Settings, op: ReduceOp, dtype: &str, init: T)
 where
-    T: Clone + RunBaseline + RunNumKong + RunNdarray + RunPolars + 'static,
+    T: Clone + RunBaseline + RunNumKong + RunNdarray + RunPolars + RunArgMinMax + 'static,
 {
     let name = format!("reduce/{}/{}", op.slug(), dtype);
     if !settings.selects(&name) {
@@ -195,6 +259,7 @@ where
     <T as RunNumKong>::run(op, &mut group, &data);
     <T as RunNdarray>::run(op, &mut group, &data);
     <T as RunPolars>::run(op, &mut group, &data);
+    <T as RunArgMinMax>::run(op, &mut group, &data);
 
     group.finish();
 }
@@ -208,6 +273,13 @@ pub fn bench_sum(c: &mut Criterion, settings: &Settings) {
     bench_reduce_op_dtype(c, settings, ReduceOp::Sum, "f64", 1.0f64);
     bench_reduce_op_dtype(c, settings, ReduceOp::Sum, "u8", 1u8);
     bench_reduce_op_dtype(c, settings, ReduceOp::Sum, "bf16", bf16::from_f32(1.0));
+}
+
+pub fn bench_minmax(c: &mut Criterion, settings: &Settings) {
+    bench_reduce_op_dtype(c, settings, ReduceOp::MinMax, "f32", 1.0f32);
+    bench_reduce_op_dtype(c, settings, ReduceOp::MinMax, "f64", 1.0f64);
+    bench_reduce_op_dtype(c, settings, ReduceOp::MinMax, "u8", 1u8);
+    bench_reduce_op_dtype(c, settings, ReduceOp::MinMax, "bf16", bf16::from_f32(1.0));
 }
 
 trait RunRowNorms: Clone + 'static {
@@ -380,6 +452,11 @@ mod tests {
     }
 
     #[test]
+    fn baseline_minmax_takes_first_extremes() {
+        assert_eq!(baseline_minmax(&[3u8, 1, 7, 1, 7]), (1, 2));
+    }
+
+    #[test]
     fn baseline_row_norms_float_correctness() {
         // 2 rows of 2 elements: [3, 4] and [5, 12]
         let data = vec![3.0f32, 4.0, 5.0, 12.0];
@@ -396,9 +473,12 @@ mod tests {
 
 fn main() {
     let settings = Settings::read();
-    capabilities::configure_thread();
+    Capabilities::cpu_enabled()
+        .configure_thread()
+        .expect("Failed to configure the thread");
     let mut criterion = numwars::configure_criterion(&settings);
     bench_sum(&mut criterion, &settings);
+    bench_minmax(&mut criterion, &settings);
     bench_row_norms(&mut criterion, &settings);
     criterion.final_summary();
 }

@@ -6,7 +6,7 @@
 //! flash-attention exists only for CUDA).
 //!
 //! Competitors:
-//! - numkong (AttentionKeyValueCache::try_attention on pre-packed KV)
+//! - numkong (AttentionPackedMatrix::attention on pre-packed KV)
 //! - candle (candle-core matmul + candle-nn softmax_last_dim)
 //!
 //! Run with:
@@ -23,9 +23,9 @@ use std::hint::black_box;
 use candle_core::{DType, Device, Tensor as CandleTensor};
 use criterion::measurement::WallTime;
 use criterion::{BenchmarkGroup, Criterion, Throughput};
-use numkong::{bf16, capabilities, e4m3, Attention, AttentionKeyValueCache, Tensor};
+use numkong::{bf16, e4m3, f16, Attention, AttentionPackedMatrix, Capabilities, Tensor};
 
-use numwars::Settings;
+use numwars::{try_spawn_pool, Settings};
 
 const HEAD_COUNT: usize = 8;
 
@@ -37,24 +37,43 @@ fn run_numkong<T: Attention + Clone>(
     kv_length: usize,
     head_dim: usize,
     query_count: usize,
+    threads: usize,
 ) {
     let row_width = HEAD_COUNT * head_dim;
-    let queries = Tensor::<T>::try_full(&[query_count, row_width], init.clone()).expect("Failed to create queries");
-    let keys = Tensor::<T>::try_full(&[kv_length, row_width], init.clone()).expect("Failed to create keys");
-    let values = Tensor::<T>::try_full(&[kv_length, row_width], init).expect("Failed to create values");
+    let queries = Tensor::<T>::full(&[query_count, row_width], init.clone()).expect("Failed to create queries");
+    let keys = Tensor::<T>::full(&[kv_length, row_width], init.clone()).expect("Failed to create keys");
+    let values = Tensor::<T>::full(&[kv_length, row_width], init).expect("Failed to create values");
     let kv_offsets = [0u32, kv_length as u32];
     let query_offsets = [0u32, query_count as u32];
-    let cache = AttentionKeyValueCache::<T>::try_pack(&keys.view(), &values.view(), head_dim, &kv_offsets, None)
+    let cache = AttentionPackedMatrix::<T>::new(&keys.view(), &values.view(), head_dim, &kv_offsets, None)
         .expect("Failed to pack the KV cache");
 
-    group.bench_function("numkong", |b| {
-        b.iter(|| {
-            let outputs = cache
-                .try_attention(black_box(&queries.view()), &query_offsets, None)
-                .expect("Attention failed");
-            black_box(outputs)
-        })
-    });
+    // Bidirectional, like candle's unmasked softmax
+    match try_spawn_pool(threads) {
+        Some(mut pool) => group.bench_function("numkong", |b| {
+            b.iter(|| {
+                let outputs = cache
+                    .attention_parallel(
+                        black_box(&queries.view()),
+                        &query_offsets,
+                        None,
+                        usize::MAX,
+                        usize::MAX,
+                        &mut pool,
+                    )
+                    .expect("Attention failed");
+                black_box(outputs)
+            })
+        }),
+        None => group.bench_function("numkong", |b| {
+            b.iter(|| {
+                let outputs = cache
+                    .attention(black_box(&queries.view()), &query_offsets, None, usize::MAX, usize::MAX)
+                    .expect("Attention failed");
+                black_box(outputs)
+            })
+        }),
+    };
 }
 
 fn run_candle(
@@ -126,17 +145,22 @@ pub fn bench_attention(c: &mut Criterion, settings: &Settings) {
     let kv_length = settings.dims_height;
     let head_dim = settings.dims_width;
     let query_count = settings.dims_depth;
+    let threads = settings.threads;
 
     // candle's CPU backend has no BF16 matmul ("unsupported dtype BF16 for op matmul"),
-    // so it only competes in the F32 group below.
+    // so it competes only in the F16 and F32 groups.
     bench_attention_dtype(c, settings, "bf16", kv_length, head_dim, query_count, |group| {
-        run_numkong(group, bf16::from_f32(0.5), kv_length, head_dim, query_count);
+        run_numkong(group, bf16::from_f32(0.5), kv_length, head_dim, query_count, threads);
+    });
+    bench_attention_dtype(c, settings, "f16", kv_length, head_dim, query_count, |group| {
+        run_numkong(group, f16::from_f32(0.5), kv_length, head_dim, query_count, threads);
+        run_candle(group, DType::F16, kv_length, head_dim, query_count);
     });
     bench_attention_dtype(c, settings, "e4m3", kv_length, head_dim, query_count, |group| {
-        run_numkong(group, e4m3::from_f32(0.5), kv_length, head_dim, query_count);
+        run_numkong(group, e4m3::from_f32(0.5), kv_length, head_dim, query_count, threads);
     });
     bench_attention_dtype(c, settings, "i8", kv_length, head_dim, query_count, |group| {
-        run_numkong(group, 16i8, kv_length, head_dim, query_count);
+        run_numkong(group, 16i8, kv_length, head_dim, query_count, threads);
     });
     bench_attention_dtype(c, settings, "f32", kv_length, head_dim, query_count, |group| {
         run_candle(group, DType::F32, kv_length, head_dim, query_count);
@@ -149,7 +173,9 @@ pub fn bench_attention(c: &mut Criterion, settings: &Settings) {
 
 fn main() {
     let settings = Settings::read();
-    capabilities::configure_thread();
+    Capabilities::cpu_enabled()
+        .configure_thread()
+        .expect("Failed to configure the thread");
     let mut criterion = numwars::configure_criterion(&settings);
     bench_attention(&mut criterion, &settings);
     criterion.final_summary();

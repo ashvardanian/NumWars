@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
-Geospatial distance benchmarks: NumKong vs Python alternatives.
+Many-to-many geospatial distance benchmarks: NumKong vs Python alternatives.
 
-Benchmarks batched coordinate-pair distances for:
-- haversine
-- vincenty-like geodesic distance
+Scores every row point against every column point into a [rows,columns] matrix:
+- haversines: great-circle metres on the IUGG mean sphere, against scikit-learn and NumPy
+- vincentys: geodesic metres on the WGS-84 ellipsoid, against pyproj's Karney solver
+- sqeuclideans3d: squared distances between Earth-fixed points, against SciPy's cdist
+
+Each point set packs once, outside the timed loop, as the dots suite packs its B operand.
 
 Can be run with uv:
-    uv run --with numkong,numpy,geopy,tabulate geospatial/bench.py
+    uv run --with numkong,numpy,scipy,scikit-learn,pyproj,tabulate geospatial/bench.py
 
 Or with traditional pip:
     pip install -e ".[geospatial]"
@@ -15,12 +18,13 @@ Or with traditional pip:
 """
 
 import json
-import math
 import sys
 from dataclasses import dataclass
 
 import numpy as np
-from geopy.distance import geodesic, great_circle
+from pyproj import Geod
+from scipy.spatial.distance import cdist
+from sklearn.metrics.pairwise import haversine_distances
 
 from numwars import (
     Settings,
@@ -39,7 +43,8 @@ except ImportError:
     sys.exit(1)
 
 
-EARTH_RADIUS_KM = 6371.0
+EARTH_RADIUS_METERS = 6_371_008.8
+EARTH_RADIUS_CENTIMETERS = 637_100_000
 
 
 @dataclass
@@ -48,198 +53,70 @@ class BenchmarkResult:
     library: str
     input_dtype: str
     output_dtype: str
-    count: int
+    rows: int
+    columns: int
     duration_secs: float
     primary_value: float
 
 
-def build_coords(count: int, seed: int, dtype=np.float32) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    rng = np.random.default_rng(seed)
-    a_lats = rng.uniform(-90.0, 90.0, size=count).astype(dtype)
-    a_lons = rng.uniform(-180.0, 180.0, size=count).astype(dtype)
-    b_lats = rng.uniform(-90.0, 90.0, size=count).astype(dtype)
-    b_lons = rng.uniform(-180.0, 180.0, size=count).astype(dtype)
-    return a_lats, a_lons, b_lats, b_lons
+def build_coords(count: int, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
+    """Latitudes and longitudes in radians, as NumKong and scikit-learn take them."""
+    latitudes = np.radians(rng.uniform(-90.0, 90.0, size=count))
+    longitudes = np.radians(rng.uniform(-180.0, 180.0, size=count))
+    return latitudes, longitudes
 
 
-def baseline_haversine(latitude_a: float, longitude_a: float, latitude_b: float, longitude_b: float) -> float:
-    lat_a = math.radians(latitude_a)
-    lat_b = math.radians(latitude_b)
-    delta_lat = math.radians(latitude_b - latitude_a)
-    delta_lon = math.radians(longitude_b - longitude_a)
+def build_points(count: int, dtype_str: str, rng: np.random.Generator) -> np.ndarray:
+    """Earth-fixed points: `i32` centimetres or `f64` metres within the Earth's radius on every axis."""
+    if dtype_str == "i32":
+        return rng.integers(-EARTH_RADIUS_CENTIMETERS, EARTH_RADIUS_CENTIMETERS, size=(count, 3), dtype=np.int32)
+    return rng.uniform(-EARTH_RADIUS_CENTIMETERS / 100, EARTH_RADIUS_CENTIMETERS / 100, size=(count, 3))
+
+
+def numpy_haversines(rows: tuple[np.ndarray, np.ndarray], columns: tuple[np.ndarray, np.ndarray]) -> np.ndarray:
+    """Great-circle metres between every row and column point, broadcast over a [rows,columns] grid."""
+    row_latitudes, row_longitudes = rows[0][:, None], rows[1][:, None]
+    column_latitudes, column_longitudes = columns[0][None, :], columns[1][None, :]
     half_chord_squared = (
-        math.sin(delta_lat / 2.0) ** 2 + math.cos(lat_a) * math.cos(lat_b) * math.sin(delta_lon / 2.0) ** 2
+        np.sin((column_latitudes - row_latitudes) / 2) ** 2
+        + np.cos(row_latitudes) * np.cos(column_latitudes) * np.sin((column_longitudes - row_longitudes) / 2) ** 2
     )
-    return EARTH_RADIUS_KM * 2.0 * math.asin(math.sqrt(half_chord_squared))
+    return 2 * EARTH_RADIUS_METERS * np.arcsin(np.sqrt(half_chord_squared))
 
 
-def baseline_vincenty(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    a = 6_378_137.0
-    f = 1.0 / 298.257_223_563
-    b = a * (1.0 - f)
-
-    phi1 = math.radians(lat1)
-    phi2 = math.radians(lat2)
-    l = math.radians(lon2 - lon1)
-
-    u1 = math.atan((1.0 - f) * math.tan(phi1))
-    u2 = math.atan((1.0 - f) * math.tan(phi2))
-    sin_u1 = math.sin(u1)
-    cos_u1 = math.cos(u1)
-    sin_u2 = math.sin(u2)
-    cos_u2 = math.cos(u2)
-
-    lam = l
-    sin_sigma = 0.0
-    cos_sigma = 0.0
-    sigma = 0.0
-    sin_alpha = 0.0
-    cos_sq_alpha = 0.0
-    cos_2sigma_m = 0.0
-
-    for _ in range(200):
-        sin_lambda = math.sin(lam)
-        cos_lambda = math.cos(lam)
-        sin_sigma = math.sqrt((cos_u2 * sin_lambda) ** 2 + (cos_u1 * sin_u2 - sin_u1 * cos_u2 * cos_lambda) ** 2)
-        if sin_sigma == 0.0:
-            return 0.0
-
-        cos_sigma = sin_u1 * sin_u2 + cos_u1 * cos_u2 * cos_lambda
-        sigma = math.atan2(sin_sigma, cos_sigma)
-        sin_alpha = cos_u1 * cos_u2 * sin_lambda / sin_sigma
-        cos_sq_alpha = 1.0 - sin_alpha * sin_alpha
-        cos_2sigma_m = cos_sigma - 2.0 * sin_u1 * sin_u2 / cos_sq_alpha if cos_sq_alpha != 0.0 else 0.0
-
-        c = f / 16.0 * cos_sq_alpha * (4.0 + f * (4.0 - 3.0 * cos_sq_alpha))
-        lam_prev = lam
-        lam = l + (1.0 - c) * f * sin_alpha * (
-            sigma + c * sin_sigma * (cos_2sigma_m + c * cos_sigma * (-1.0 + 2.0 * cos_2sigma_m * cos_2sigma_m))
-        )
-        if abs(lam - lam_prev) < 1e-12:
-            break
-
-    u_sq = cos_sq_alpha * (a * a - b * b) / (b * b)
-    cap_a = 1.0 + u_sq / 16384.0 * (4096.0 + u_sq * (-768.0 + u_sq * (320.0 - 175.0 * u_sq)))
-    cap_b = u_sq / 1024.0 * (256.0 + u_sq * (-128.0 + u_sq * (74.0 - 47.0 * u_sq)))
-    delta_sigma = (
-        cap_b
-        * sin_sigma
-        * (
-            cos_2sigma_m
-            + cap_b
-            / 4.0
-            * (
-                cos_sigma * (-1.0 + 2.0 * cos_2sigma_m * cos_2sigma_m)
-                - cap_b
-                / 6.0
-                * cos_2sigma_m
-                * (-3.0 + 4.0 * sin_sigma * sin_sigma)
-                * (-3.0 + 4.0 * cos_2sigma_m * cos_2sigma_m)
-            )
-        )
-    )
-    return b * cap_a * (sigma - delta_sigma) / 1000.0
-
-
-def benchmark_numkong(
-    workload: str,
-    func,
-    a_lats: np.ndarray,
-    a_lons: np.ndarray,
-    b_lats: np.ndarray,
-    b_lons: np.ndarray,
-    settings: Settings,
+def benchmark(
+    workload: str, library: str, input_dtype: str, rows: int, columns: int, func, settings: Settings
 ) -> BenchmarkResult:
-    input_dtype = normalize_dtype_name(a_lats.dtype)
-    sample_output = func(a_lats, a_lons, b_lats, b_lons)
-    output_dtype = normalize_dtype_name(getattr(sample_output, "dtype", a_lats.dtype))
-    out = np.empty(a_lats.shape[0], dtype=a_lats.dtype)
-    duration = measure_average_duration(
-        lambda: func(a_lats, a_lons, b_lats, b_lons, out=out),
-        settings,
-    )
+    output_dtype = normalize_dtype_name(np.asarray(func()).dtype)
+    duration = measure_average_duration(func, settings)
     return BenchmarkResult(
         workload=workload,
-        library="NumKong",
+        library=library,
         input_dtype=input_dtype,
         output_dtype=output_dtype,
-        count=a_lats.shape[0],
+        rows=rows,
+        columns=columns,
         duration_secs=duration,
-        primary_value=calculate_mps(a_lats.shape[0], duration),
+        primary_value=calculate_mps(rows * columns, duration),
     )
 
 
-def benchmark_serial(
-    workload: str,
-    func,
-    a_lats: np.ndarray,
-    a_lons: np.ndarray,
-    b_lats: np.ndarray,
-    b_lons: np.ndarray,
-    settings: Settings,
-) -> BenchmarkResult:
-    out = np.empty(a_lats.shape[0], dtype=np.float64)
-
-    def run_once() -> None:
-        for index in range(a_lats.shape[0]):
-            out[index] = func(
-                float(a_lats[index]),
-                float(a_lons[index]),
-                float(b_lats[index]),
-                float(b_lons[index]),
-            )
-
-    duration = measure_average_duration(run_once, settings)
-    return BenchmarkResult(
-        workload=workload,
-        library="Serial",
-        input_dtype=normalize_dtype_name(a_lats.dtype),
-        output_dtype="f64",
-        count=a_lats.shape[0],
-        duration_secs=duration,
-        primary_value=calculate_mps(a_lats.shape[0], duration),
-    )
-
-
-def benchmark_geopy(
-    workload: str,
-    func,
-    a_lats: np.ndarray,
-    a_lons: np.ndarray,
-    b_lats: np.ndarray,
-    b_lons: np.ndarray,
-    settings: Settings,
-) -> BenchmarkResult:
-    pairs = list(zip(zip(a_lats.tolist(), a_lons.tolist()), zip(b_lats.tolist(), b_lons.tolist())))
-    out = np.empty(len(pairs), dtype=np.float64)
-
-    def run_once() -> None:
-        for index, (point_a, point_b) in enumerate(pairs):
-            out[index] = func(point_a, point_b).km
-
-    duration = measure_average_duration(run_once, settings)
-    return BenchmarkResult(
-        workload=workload,
-        library="geopy",
-        input_dtype=normalize_dtype_name(a_lats.dtype),
-        output_dtype="f64",
-        count=len(pairs),
-        duration_secs=duration,
-        primary_value=calculate_mps(len(pairs), duration),
-    )
+def benchmark_id(workload: str, library: str, input_dtype: str, rows: int, columns: int) -> str:
+    return f"geospatial/{workload}/{library.lower()}/{input_dtype}/{rows}x{columns}"
 
 
 def result_to_entry(result: BenchmarkResult) -> dict:
     return {
         "suite": "geospatial",
         "workload": result.workload,
-        "benchmark_id": f"geospatial/{result.workload}/{result.library.lower()}/{result.input_dtype}",
+        "benchmark_id": benchmark_id(result.workload, result.library, result.input_dtype, result.rows, result.columns),
         "library": result.library,
         "dtype": result.input_dtype,
         "input_dtype": result.input_dtype,
         "output_dtype": result.output_dtype,
         "display_signature": f"{result.input_dtype} \u2192 {result.output_dtype}",
-        "count": result.count,
+        "height": result.rows,
+        "width": result.columns,
         "primary_value": result.primary_value,
         "unit": "MP/s",
         "duration_secs": result.duration_secs,
@@ -250,138 +127,46 @@ def main() -> None:
     settings = read_settings()
     if settings.output == "table":
         print_settings(settings)
-    count = settings.batch_size
+    rows, columns = settings.dims_height, settings.dims_width
 
-    a_lats, a_lons, b_lats, b_lons = build_coords(count, settings.seed)
-    a_lats64, a_lons64, b_lats64, b_lons64 = build_coords(count, settings.seed, dtype=np.float64)
+    rng = np.random.default_rng(settings.seed)
+    row_coords, column_coords = build_coords(rows, rng), build_coords(columns, rng)
+    haversine_rows, haversine_columns = nk.haversines_pack(*row_coords), nk.haversines_pack(*column_coords)
+    vincenty_rows, vincenty_columns = nk.vincentys_pack(*row_coords), nk.vincentys_pack(*column_coords)
+    sklearn_rows, sklearn_columns = np.column_stack(row_coords), np.column_stack(column_coords)
+    # pyproj pairs its inputs elementwise, so the grid is spelled out once, in degrees
+    row_latitudes, row_longitudes = (np.repeat(np.degrees(axis), columns) for axis in row_coords)
+    column_latitudes, column_longitudes = (np.tile(np.degrees(axis), rows) for axis in column_coords)
+    geodesic = Geod(ellps="WGS84")
+    points = {dtype: (build_points(rows, dtype, rng), build_points(columns, dtype, rng)) for dtype in ("i32", "f64")}
+
     benchmarks = [
+        ("haversines", "NumKong", "f64", lambda: nk.haversines_packed(haversine_rows, haversine_columns)),
         (
-            "geospatial/haversine/numkong/f32",
-            lambda: benchmark_numkong(
-                "haversine",
-                nk.haversine,
-                a_lats,
-                a_lons,
-                b_lats,
-                b_lons,
-                settings,
-            ),
+            "haversines",
+            "scikit-learn",
+            "f64",
+            lambda: haversine_distances(sklearn_rows, sklearn_columns) * EARTH_RADIUS_METERS,
         ),
+        ("haversines", "NumPy", "f64", lambda: numpy_haversines(row_coords, column_coords)),
+        ("vincentys", "NumKong", "f64", lambda: nk.vincentys_packed(vincenty_rows, vincenty_columns)),
         (
-            "geospatial/haversine/numkong/f64",
-            lambda: benchmark_numkong(
-                "haversine",
-                nk.haversine,
-                a_lats64,
-                a_lons64,
-                b_lats64,
-                b_lons64,
-                settings,
-            ),
+            "vincentys",
+            "pyproj",
+            "f64",
+            lambda: geodesic.inv(row_longitudes, row_latitudes, column_longitudes, column_latitudes)[2],
         ),
-        (
-            "geospatial/haversine/serial/f32",
-            lambda: benchmark_serial(
-                "haversine",
-                baseline_haversine,
-                a_lats,
-                a_lons,
-                b_lats,
-                b_lons,
-                settings,
-            ),
-        ),
-        (
-            "geospatial/haversine/serial/f64",
-            lambda: benchmark_serial(
-                "haversine",
-                baseline_haversine,
-                a_lats64,
-                a_lons64,
-                b_lats64,
-                b_lons64,
-                settings,
-            ),
-        ),
-        (
-            "geospatial/haversine/geopy/f64",
-            lambda: benchmark_geopy(
-                "haversine",
-                great_circle,
-                a_lats64,
-                a_lons64,
-                b_lats64,
-                b_lons64,
-                settings,
-            ),
-        ),
-        (
-            "geospatial/vincenty/numkong/f32",
-            lambda: benchmark_numkong(
-                "vincenty",
-                nk.vincenty,
-                a_lats,
-                a_lons,
-                b_lats,
-                b_lons,
-                settings,
-            ),
-        ),
-        (
-            "geospatial/vincenty/numkong/f64",
-            lambda: benchmark_numkong(
-                "vincenty",
-                nk.vincenty,
-                a_lats64,
-                a_lons64,
-                b_lats64,
-                b_lons64,
-                settings,
-            ),
-        ),
-        (
-            "geospatial/vincenty/serial/f32",
-            lambda: benchmark_serial(
-                "vincenty",
-                baseline_vincenty,
-                a_lats,
-                a_lons,
-                b_lats,
-                b_lons,
-                settings,
-            ),
-        ),
-        (
-            "geospatial/vincenty/serial/f64",
-            lambda: benchmark_serial(
-                "vincenty",
-                baseline_vincenty,
-                a_lats64,
-                a_lons64,
-                b_lats64,
-                b_lons64,
-                settings,
-            ),
-        ),
-        (
-            "geospatial/vincenty/geopy/f64",
-            lambda: benchmark_geopy(
-                "vincenty",
-                geodesic,
-                a_lats64,
-                a_lons64,
-                b_lats64,
-                b_lons64,
-                settings,
-            ),
-        ),
+        ("sqeuclideans3d", "NumKong", "i32", lambda: nk.sqeuclideans3d(*points["i32"])),
+        ("sqeuclideans3d", "SciPy", "i32", lambda: cdist(*points["i32"], "sqeuclidean")),
+        ("sqeuclideans3d", "NumKong", "f64", lambda: nk.sqeuclideans3d(*points["f64"])),
+        ("sqeuclideans3d", "SciPy", "f64", lambda: cdist(*points["f64"], "sqeuclidean")),
     ]
 
     results = []
-    for benchmark_id, benchmark_fn in benchmarks:
-        if not settings.selects(benchmark_id):
+    for workload, library, input_dtype, func in benchmarks:
+        if not settings.selects(benchmark_id(workload, library, input_dtype, rows, columns)):
             continue
-        results.append(result_to_entry(benchmark_fn()))
+        results.append(result_to_entry(benchmark(workload, library, input_dtype, rows, columns, func, settings)))
 
     if settings.output == "json":
         json.dump({"results": results}, sys.stdout, indent=2)

@@ -1,44 +1,52 @@
-//! Benchmark for mesh alignment operations (RMSD, Kabsch, Umeyama)
+//! Benchmark for many-to-many shape distances between 3D point clouds
 //!
-//! Compares NumKong vs nalgebra-based baseline implementations for 3D point cloud
-//! alignment algorithms. Mini-float types (`f16`, `bf16`) are numkong-first.
+//! Scores every row cloud against every column cloud with the correspondence-free distances that
+//! replaced mesh alignment: Chamfer, Hausdorff, Wasserstein-Procrustes and Gromov-Wasserstein.
+//! Clouds pack once, outside the timed loop, centered and rotated onto their principal axes, and
+//! every kind takes the best of the 8 sign flips of those axes. The nalgebra baseline packs the
+//! same way with `SymmetricEigen` and searches the same flips by brute force. The two transport
+//! kinds have no Rust competitor.
 //!
 //! Run with:
 //! ```bash
 //! cargo bench --features bench_mesh --bench bench_mesh
-//! NUMWARS_FILTER="mesh/rmsd" cargo bench --features bench_mesh
+//! NUMWARS_FILTER="mesh/chamfers" NUMWARS_SHAPE_POINTS=128 cargo bench --features bench_mesh
 //! ```
 //!
-//! Benchmark naming: mesh/{operation}/{dtype}
-//! Examples: mesh/rmsd/f32, mesh/kabsch/f64, mesh/umeyama/bf16
+//! Benchmark naming: mesh/{kind}/{dtype}/{rows}x{columns}x{points}
+//! Examples: mesh/chamfers/f32/8x8x32, mesh/gromovwassersteins/f16/8x8x32
 
 use std::hint::black_box;
 
 use criterion::measurement::WallTime;
 use criterion::{BenchmarkGroup, Criterion, Throughput};
-use nalgebra::Matrix3;
-use num_traits::Float;
-use numkong::{bf16, capabilities, f16, MeshAlignment, NumberLike};
+use nalgebra::{Matrix3, SymmetricEigen, Vector3};
+use numkong::{f16, Capabilities, NumberLike, Shapes, ShapesPackedMatrix};
 use rand::rngs::StdRng;
 use rand::{Rng, RngExt, SeedableRng};
 
-use numwars::{BaselineConvert, Settings};
+use numwars::Settings;
+
+/// Row and column clouds per call, the square tile NumKong's own benchmarks time.
+const CLOUD_COUNT: usize = 8;
 
 // region: Operation Model
 
 #[derive(Clone, Copy)]
-enum MeshOp {
-    Rmsd,
-    Kabsch,
-    Umeyama,
+enum ShapeKind {
+    Chamfers,
+    Hausdorffs,
+    WassersteinProcrustes,
+    GromovWassersteins,
 }
 
-impl MeshOp {
+impl ShapeKind {
     fn slug(self) -> &'static str {
         match self {
-            MeshOp::Rmsd => "rmsd",
-            MeshOp::Kabsch => "kabsch",
-            MeshOp::Umeyama => "umeyama",
+            ShapeKind::Chamfers => "chamfers",
+            ShapeKind::Hausdorffs => "hausdorffs",
+            ShapeKind::WassersteinProcrustes => "wassersteinprocrustes",
+            ShapeKind::GromovWassersteins => "gromovwassersteins",
         }
     }
 }
@@ -47,205 +55,58 @@ impl MeshOp {
 
 // region: Baseline Implementations
 
-/// Baseline RMSD: simple point-to-point root mean square deviation (no alignment).
-fn baseline_rmsd<T: Float>(a_points: &[[T; 3]], b_points: &[[T; 3]]) -> T {
-    let n = T::from(a_points.len()).unwrap();
-    let mut sum_sq = T::zero();
-    for (a, b) in a_points.iter().zip(b_points) {
-        let dx = a[0] - b[0];
-        let dy = a[1] - b[1];
-        let dz = a[2] - b[2];
-        sum_sq = sum_sq + dx * dx + dy * dy + dz * dz;
-    }
-    (sum_sq / n).sqrt()
+/// Centers `cloud` on its centroid and rotates it onto its principal axes in descending spread,
+/// as NumKong packs it.
+fn baseline_pack<T: NumberLike + Copy>(cloud: &[[T; 3]]) -> Vec<Vector3<f64>> {
+    let points: Vec<Vector3<f64>> = cloud
+        .iter()
+        .map(|point| Vector3::from_fn(|axis, _| point[axis].to_f64()))
+        .collect();
+    let count = points.len() as f64;
+    let centroid = points.iter().sum::<Vector3<f64>>() / count;
+    let covariance = points
+        .iter()
+        .map(|point| (point - centroid) * (point - centroid).transpose())
+        .sum::<Matrix3<f64>>()
+        / count;
+    let eigen = SymmetricEigen::new(covariance);
+    let mut order = [0, 1, 2];
+    order.sort_by(|&first, &second| eigen.eigenvalues[second].total_cmp(&eigen.eigenvalues[first]));
+    let axes = Matrix3::from_columns(&order.map(|axis| eigen.eigenvectors.column(axis).into_owned()));
+    points
+        .iter()
+        .map(|point| axes.transpose() * (point - centroid))
+        .collect()
 }
 
-/// RMSD baseline variant for types accumulated through f32 conversion.
-fn baseline_rmsd_f32<T: BaselineConvert<f32> + Copy>(a_points: &[[T; 3]], b_points: &[[T; 3]]) -> f32 {
-    let n = a_points.len() as f32;
-    let mut sum_sq = 0.0f32;
-    for (a, b) in a_points.iter().zip(b_points) {
-        let dx = a[0].to_acc() - b[0].to_acc();
-        let dy = a[1].to_acc() - b[1].to_acc();
-        let dz = a[2].to_acc() - b[2].to_acc();
-        sum_sq += dx * dx + dy * dy + dz * dz;
+/// The mean and the largest distance from every point of `from` to its nearest point of `to`
+/// flipped by `signs`.
+fn baseline_nearest(from: &[Vector3<f64>], to: &[Vector3<f64>], signs: &Vector3<f64>) -> (f64, f64) {
+    let (mut sum, mut largest) = (0.0, 0.0f64);
+    for point in from {
+        let squares = to
+            .iter()
+            .map(|other| (point - other.component_mul(signs)).norm_squared());
+        let nearest = squares.fold(f64::INFINITY, f64::min).sqrt();
+        sum += nearest;
+        largest = largest.max(nearest);
     }
-    (sum_sq / n).sqrt()
+    (sum / from.len() as f64, largest)
 }
 
-/// Baseline Kabsch algorithm: optimal rotation via SVD to minimize RMSD.
-///
-/// Returns (rotation_matrix, rmsd) where rotation_matrix is [f64; 9] in row-major order.
-fn baseline_kabsch<T: Float + Into<f64> + 'static>(a_points: &[[T; 3]], b_points: &[[T; 3]]) -> ([f64; 9], f64)
-where
-    f64: From<T>,
-{
-    let n = a_points.len() as f64;
-
-    let (mut ca, mut cb) = ([0.0f64; 3], [0.0f64; 3]);
-    for (a, b) in a_points.iter().zip(b_points) {
-        for k in 0..3 {
-            ca[k] += f64::from(a[k]);
-            cb[k] += f64::from(b[k]);
+/// Chamfer or Hausdorff distance between two packed clouds, the best of the 8 sign flips.
+fn baseline_distance(kind: ShapeKind, a: &[Vector3<f64>], b: &[Vector3<f64>]) -> f64 {
+    let flipped = |flip: usize| {
+        let signs = Vector3::from_fn(|axis, _| if flip >> axis & 1 == 1 { -1.0 } else { 1.0 });
+        // A flip is its own inverse, so the reverse direction flips `a` instead of `b`
+        let (forward_mean, forward_largest) = baseline_nearest(a, b, &signs);
+        let (reverse_mean, reverse_largest) = baseline_nearest(b, a, &signs);
+        match kind {
+            ShapeKind::Chamfers => (forward_mean + reverse_mean) / 2.0,
+            _ => forward_largest.max(reverse_largest),
         }
-    }
-    for k in 0..3 {
-        ca[k] /= n;
-        cb[k] /= n;
-    }
-
-    let mut h = Matrix3::<f64>::zeros();
-    for (a, b) in a_points.iter().zip(b_points) {
-        let ac = [
-            f64::from(a[0]) - ca[0],
-            f64::from(a[1]) - ca[1],
-            f64::from(a[2]) - ca[2],
-        ];
-        let bc = [
-            f64::from(b[0]) - cb[0],
-            f64::from(b[1]) - cb[1],
-            f64::from(b[2]) - cb[2],
-        ];
-        for row in 0..3 {
-            for col in 0..3 {
-                h[(row, col)] += ac[row] * bc[col];
-            }
-        }
-    }
-
-    let svd = h.svd(true, true);
-    let u = svd.u.expect("SVD U missing");
-    let v_t = svd.v_t.expect("SVD Vt missing");
-
-    let v = v_t.transpose();
-    let d = (v * u.transpose()).determinant();
-    let sign = if d < 0.0 { -1.0 } else { 1.0 };
-    let diag = Matrix3::from_diagonal(&nalgebra::Vector3::new(1.0, 1.0, sign));
-    let rotation = v * diag * u.transpose();
-
-    let mut sum_sq = 0.0f64;
-    for (a, b) in a_points.iter().zip(b_points) {
-        let ac = [
-            f64::from(a[0]) - ca[0],
-            f64::from(a[1]) - ca[1],
-            f64::from(a[2]) - ca[2],
-        ];
-        let bc = [
-            f64::from(b[0]) - cb[0],
-            f64::from(b[1]) - cb[1],
-            f64::from(b[2]) - cb[2],
-        ];
-        let ra = [
-            rotation[(0, 0)] * ac[0] + rotation[(0, 1)] * ac[1] + rotation[(0, 2)] * ac[2],
-            rotation[(1, 0)] * ac[0] + rotation[(1, 1)] * ac[1] + rotation[(1, 2)] * ac[2],
-            rotation[(2, 0)] * ac[0] + rotation[(2, 1)] * ac[1] + rotation[(2, 2)] * ac[2],
-        ];
-        let dx = ra[0] - bc[0];
-        let dy = ra[1] - bc[1];
-        let dz = ra[2] - bc[2];
-        sum_sq += dx * dx + dy * dy + dz * dz;
-    }
-    let rmsd = (sum_sq / n).sqrt();
-
-    let mut rot_arr = [0.0f64; 9];
-    for row in 0..3 {
-        for col in 0..3 {
-            rot_arr[row * 3 + col] = rotation[(row, col)];
-        }
-    }
-
-    (rot_arr, rmsd)
-}
-
-/// Baseline Umeyama algorithm: Kabsch with uniform scale estimation.
-///
-/// Returns (rotation_matrix, scale, rmsd).
-fn baseline_umeyama<T: Float + Into<f64> + 'static>(a_points: &[[T; 3]], b_points: &[[T; 3]]) -> ([f64; 9], f64, f64)
-where
-    f64: From<T>,
-{
-    let n = a_points.len() as f64;
-
-    let (mut ca, mut cb) = ([0.0f64; 3], [0.0f64; 3]);
-    for (a, b) in a_points.iter().zip(b_points) {
-        for k in 0..3 {
-            ca[k] += f64::from(a[k]);
-            cb[k] += f64::from(b[k]);
-        }
-    }
-    for k in 0..3 {
-        ca[k] /= n;
-        cb[k] /= n;
-    }
-
-    let mut h = Matrix3::<f64>::zeros();
-    let mut var_a = 0.0f64;
-    for (a, b) in a_points.iter().zip(b_points) {
-        let ac = [
-            f64::from(a[0]) - ca[0],
-            f64::from(a[1]) - ca[1],
-            f64::from(a[2]) - ca[2],
-        ];
-        let bc = [
-            f64::from(b[0]) - cb[0],
-            f64::from(b[1]) - cb[1],
-            f64::from(b[2]) - cb[2],
-        ];
-        var_a += ac[0] * ac[0] + ac[1] * ac[1] + ac[2] * ac[2];
-        for row in 0..3 {
-            for col in 0..3 {
-                h[(row, col)] += ac[row] * bc[col];
-            }
-        }
-    }
-    var_a /= n;
-
-    let svd = h.svd(true, true);
-    let u = svd.u.expect("SVD U missing");
-    let v_t = svd.v_t.expect("SVD Vt missing");
-    let singular_values = svd.singular_values;
-
-    let v = v_t.transpose();
-    let d = (v * u.transpose()).determinant();
-    let sign = if d < 0.0 { -1.0 } else { 1.0 };
-    let diag = Matrix3::from_diagonal(&nalgebra::Vector3::new(1.0, 1.0, sign));
-    let rotation = v * diag * u.transpose();
-
-    let trace_rh = singular_values[0] + singular_values[1] + sign * singular_values[2];
-    let scale = trace_rh / (n * var_a);
-
-    let mut sum_sq = 0.0f64;
-    for (a, b) in a_points.iter().zip(b_points) {
-        let ac = [
-            f64::from(a[0]) - ca[0],
-            f64::from(a[1]) - ca[1],
-            f64::from(a[2]) - ca[2],
-        ];
-        let bc = [
-            f64::from(b[0]) - cb[0],
-            f64::from(b[1]) - cb[1],
-            f64::from(b[2]) - cb[2],
-        ];
-        let ra = [
-            scale * (rotation[(0, 0)] * ac[0] + rotation[(0, 1)] * ac[1] + rotation[(0, 2)] * ac[2]),
-            scale * (rotation[(1, 0)] * ac[0] + rotation[(1, 1)] * ac[1] + rotation[(1, 2)] * ac[2]),
-            scale * (rotation[(2, 0)] * ac[0] + rotation[(2, 1)] * ac[1] + rotation[(2, 2)] * ac[2]),
-        ];
-        let dx = ra[0] - bc[0];
-        let dy = ra[1] - bc[1];
-        let dz = ra[2] - bc[2];
-        sum_sq += dx * dx + dy * dy + dz * dz;
-    }
-    let rmsd = (sum_sq / n).sqrt();
-
-    let mut rot_arr = [0.0f64; 9];
-    for row in 0..3 {
-        for col in 0..3 {
-            rot_arr[row * 3 + col] = rotation[(row, col)];
-        }
-    }
-
-    (rot_arr, scale, rmsd)
+    };
+    (0..8).map(flipped).fold(f64::INFINITY, f64::min)
 }
 
 // endregion
@@ -263,178 +124,97 @@ fn generate_point_cloud<T: NumberLike>(rng: &mut impl Rng, count: usize) -> Vec<
 
 // endregion
 
-// region: Per-Library Run Traits
+// region: Per-Library Runs
 
-trait RunBaseline: Sized {
-    fn run(_op: MeshOp, _group: &mut BenchmarkGroup<'_, WallTime>, _a: &[[Self; 3]], _b: &[[Self; 3]]) {}
+fn run_numkong<T: Shapes>(
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    kind: ShapeKind,
+    rows: &[Vec<[T; 3]>],
+    columns: &[Vec<[T; 3]>],
+) {
+    let row_slices: Vec<&[[T; 3]]> = rows.iter().map(Vec::as_slice).collect();
+    let column_slices: Vec<&[[T; 3]]> = columns.iter().map(Vec::as_slice).collect();
+    let row_pack = ShapesPackedMatrix::<T>::new(&row_slices).expect("Failed to pack rows");
+    let column_pack = ShapesPackedMatrix::<T>::new(&column_slices).expect("Failed to pack columns");
+    let mut distances = vec![T::Distance::default(); rows.len() * columns.len()];
+    group.bench_function("numkong", |bench| {
+        bench.iter(|| {
+            match kind {
+                ShapeKind::Chamfers => row_pack.chamfers(&column_pack, &mut distances, None),
+                ShapeKind::Hausdorffs => row_pack.hausdorffs(&column_pack, &mut distances, None),
+                ShapeKind::WassersteinProcrustes => row_pack.wassersteinprocrustes(&column_pack, &mut distances, None),
+                ShapeKind::GromovWassersteins => row_pack.gromovwassersteins(&column_pack, &mut distances, None),
+            }
+            .expect("Shape distances failed");
+            black_box(&distances);
+        })
+    });
 }
 
-impl RunBaseline for f32 {
-    fn run(op: MeshOp, group: &mut BenchmarkGroup<'_, WallTime>, a: &[[f32; 3]], b: &[[f32; 3]]) {
-        match op {
-            MeshOp::Rmsd => {
-                group.bench_function("baseline", |bench| bench.iter(|| black_box(baseline_rmsd(a, b))));
+fn run_nalgebra<T: NumberLike + Copy>(
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    kind: ShapeKind,
+    rows: &[Vec<[T; 3]>],
+    columns: &[Vec<[T; 3]>],
+) {
+    let row_packs: Vec<_> = rows.iter().map(|cloud| baseline_pack(cloud)).collect();
+    let column_packs: Vec<_> = columns.iter().map(|cloud| baseline_pack(cloud)).collect();
+    let mut distances = vec![0.0f64; rows.len() * columns.len()];
+    group.bench_function("nalgebra", |bench| {
+        bench.iter(|| {
+            for (row_distances, row) in distances.chunks_exact_mut(column_packs.len()).zip(&row_packs) {
+                for (distance, column) in row_distances.iter_mut().zip(&column_packs) {
+                    *distance = baseline_distance(kind, row, column);
+                }
             }
-            MeshOp::Kabsch => {
-                group.bench_function("baseline", |bench| bench.iter(|| black_box(baseline_kabsch(a, b))));
-            }
-            MeshOp::Umeyama => {
-                group.bench_function("baseline", |bench| bench.iter(|| black_box(baseline_umeyama(a, b))));
-            }
-        }
-    }
-}
-
-impl RunBaseline for f64 {
-    fn run(op: MeshOp, group: &mut BenchmarkGroup<'_, WallTime>, a: &[[f64; 3]], b: &[[f64; 3]]) {
-        match op {
-            MeshOp::Rmsd => {
-                group.bench_function("baseline", |bench| bench.iter(|| black_box(baseline_rmsd(a, b))));
-            }
-            MeshOp::Kabsch => {
-                group.bench_function("baseline", |bench| bench.iter(|| black_box(baseline_kabsch(a, b))));
-            }
-            MeshOp::Umeyama => {
-                group.bench_function("baseline", |bench| bench.iter(|| black_box(baseline_umeyama(a, b))));
-            }
-        }
-    }
-}
-
-impl RunBaseline for f16 {
-    fn run(op: MeshOp, group: &mut BenchmarkGroup<'_, WallTime>, a: &[[f16; 3]], b: &[[f16; 3]]) {
-        if let MeshOp::Rmsd = op {
-            group.bench_function("baseline", |bench| bench.iter(|| black_box(baseline_rmsd_f32(a, b))));
-        }
-    }
-}
-
-impl RunBaseline for bf16 {
-    fn run(op: MeshOp, group: &mut BenchmarkGroup<'_, WallTime>, a: &[[bf16; 3]], b: &[[bf16; 3]]) {
-        if let MeshOp::Rmsd = op {
-            group.bench_function("baseline", |bench| bench.iter(|| black_box(baseline_rmsd_f32(a, b))));
-        }
-    }
-}
-
-trait RunNalgebra: Sized {
-    fn run(_op: MeshOp, _group: &mut BenchmarkGroup<'_, WallTime>, _a: &[[Self; 3]], _b: &[[Self; 3]]) {}
-}
-
-impl RunNalgebra for f32 {
-    fn run(op: MeshOp, group: &mut BenchmarkGroup<'_, WallTime>, a: &[[f32; 3]], b: &[[f32; 3]]) {
-        match op {
-            MeshOp::Rmsd => {
-                group.bench_function("nalgebra", |bench| bench.iter(|| black_box(baseline_rmsd(a, b))));
-            }
-            MeshOp::Kabsch => {
-                group.bench_function("nalgebra", |bench| bench.iter(|| black_box(baseline_kabsch(a, b))));
-            }
-            MeshOp::Umeyama => {
-                group.bench_function("nalgebra", |bench| bench.iter(|| black_box(baseline_umeyama(a, b))));
-            }
-        }
-    }
-}
-
-impl RunNalgebra for f64 {
-    fn run(op: MeshOp, group: &mut BenchmarkGroup<'_, WallTime>, a: &[[f64; 3]], b: &[[f64; 3]]) {
-        match op {
-            MeshOp::Rmsd => {
-                group.bench_function("nalgebra", |bench| bench.iter(|| black_box(baseline_rmsd(a, b))));
-            }
-            MeshOp::Kabsch => {
-                group.bench_function("nalgebra", |bench| bench.iter(|| black_box(baseline_kabsch(a, b))));
-            }
-            MeshOp::Umeyama => {
-                group.bench_function("nalgebra", |bench| bench.iter(|| black_box(baseline_umeyama(a, b))));
-            }
-        }
-    }
-}
-
-impl RunNalgebra for f16 {}
-impl RunNalgebra for bf16 {}
-
-trait RunNumKong: MeshAlignment + Sized {
-    fn run(op: MeshOp, group: &mut BenchmarkGroup<'_, WallTime>, a: &[[Self; 3]], b: &[[Self; 3]]) {
-        match op {
-            MeshOp::Rmsd => {
-                group.bench_function("numkong", |bench| bench.iter(|| black_box(MeshAlignment::rmsd(a, b))));
-            }
-            MeshOp::Kabsch => {
-                group.bench_function("numkong", |bench| bench.iter(|| black_box(MeshAlignment::kabsch(a, b))));
-            }
-            MeshOp::Umeyama => {
-                group.bench_function("numkong", |bench| {
-                    bench.iter(|| black_box(MeshAlignment::umeyama(a, b)))
-                });
-            }
-        }
-    }
-}
-
-impl RunNumKong for f32 {}
-impl RunNumKong for f64 {}
-impl RunNumKong for f16 {}
-impl RunNumKong for bf16 {}
-
-// endregion
-
-// region: Generic Helpers
-
-fn bench_mesh_op_dtype<T>(c: &mut Criterion, settings: &Settings, rng: &mut impl Rng, op: MeshOp, dtype: &str)
-where
-    T: RunBaseline + RunNalgebra + RunNumKong + NumberLike + Clone + 'static,
-{
-    let name = format!("mesh/{}/{}", op.slug(), dtype);
-    if !settings.selects(&name) {
-        return;
-    }
-
-    let count = settings.batch_size();
-    let mut group = c.benchmark_group(name);
-    group.throughput(Throughput::Bytes((2 * count * std::mem::size_of::<[T; 3]>()) as u64));
-
-    let a = generate_point_cloud::<T>(rng, count);
-    let b = generate_point_cloud::<T>(rng, count);
-
-    <T as RunNumKong>::run(op, &mut group, &a, &b);
-    <T as RunNalgebra>::run(op, &mut group, &a, &b);
-    <T as RunBaseline>::run(op, &mut group, &a, &b);
-
-    group.finish();
+            black_box(&distances);
+        })
+    });
 }
 
 // endregion
 
 // region: Benchmarks
 
-/// Benchmark RMSD (root mean square deviation without alignment).
-pub fn bench_rmsd(c: &mut Criterion, settings: &Settings) {
+fn bench_kind_dtype<T: Shapes + NumberLike + Copy>(
+    c: &mut Criterion,
+    settings: &Settings,
+    kind: ShapeKind,
+    dtype: &str,
+) {
+    let points = settings.shape_points;
+    let name = format!("mesh/{}/{dtype}/{CLOUD_COUNT}x{CLOUD_COUNT}x{points}", kind.slug());
+    if !settings.selects(&name) {
+        return;
+    }
     let mut rng = StdRng::seed_from_u64(settings.seed.into());
-    bench_mesh_op_dtype::<f32>(c, settings, &mut rng, MeshOp::Rmsd, "f32");
-    bench_mesh_op_dtype::<f64>(c, settings, &mut rng, MeshOp::Rmsd, "f64");
-    bench_mesh_op_dtype::<f16>(c, settings, &mut rng, MeshOp::Rmsd, "f16");
-    bench_mesh_op_dtype::<bf16>(c, settings, &mut rng, MeshOp::Rmsd, "bf16");
+    let mut clouds = || {
+        let clouds = (0..CLOUD_COUNT).map(|_| generate_point_cloud::<T>(&mut rng, points));
+        clouds.collect::<Vec<_>>()
+    };
+    let (rows, columns) = (clouds(), clouds());
+
+    let mut group = c.benchmark_group(name);
+    group.throughput(Throughput::Elements((CLOUD_COUNT * CLOUD_COUNT) as u64));
+    run_numkong(&mut group, kind, &rows, &columns);
+    if let ShapeKind::Chamfers | ShapeKind::Hausdorffs = kind {
+        run_nalgebra(&mut group, kind, &rows, &columns);
+    }
+    group.finish();
 }
 
-/// Benchmark Kabsch algorithm (optimal rotation alignment).
-pub fn bench_kabsch(c: &mut Criterion, settings: &Settings) {
-    let mut rng = StdRng::seed_from_u64(settings.seed.into());
-    bench_mesh_op_dtype::<f32>(c, settings, &mut rng, MeshOp::Kabsch, "f32");
-    bench_mesh_op_dtype::<f64>(c, settings, &mut rng, MeshOp::Kabsch, "f64");
-    bench_mesh_op_dtype::<f16>(c, settings, &mut rng, MeshOp::Kabsch, "f16");
-    bench_mesh_op_dtype::<bf16>(c, settings, &mut rng, MeshOp::Kabsch, "bf16");
-}
-
-/// Benchmark Umeyama algorithm (Kabsch + uniform scale).
-pub fn bench_umeyama(c: &mut Criterion, settings: &Settings) {
-    let mut rng = StdRng::seed_from_u64(settings.seed.into());
-    bench_mesh_op_dtype::<f32>(c, settings, &mut rng, MeshOp::Umeyama, "f32");
-    bench_mesh_op_dtype::<f64>(c, settings, &mut rng, MeshOp::Umeyama, "f64");
-    bench_mesh_op_dtype::<f16>(c, settings, &mut rng, MeshOp::Umeyama, "f16");
-    bench_mesh_op_dtype::<bf16>(c, settings, &mut rng, MeshOp::Umeyama, "bf16");
+/// Benchmark every shape kind over `f32` clouds, scored in `f64`, and `f16` clouds, scored in `f32`.
+pub fn bench_shapes(c: &mut Criterion, settings: &Settings) {
+    let kinds = [
+        ShapeKind::Chamfers,
+        ShapeKind::Hausdorffs,
+        ShapeKind::WassersteinProcrustes,
+        ShapeKind::GromovWassersteins,
+    ];
+    for kind in kinds {
+        bench_kind_dtype::<f32>(c, settings, kind, "f32");
+        bench_kind_dtype::<f16>(c, settings, kind, "f16");
+    }
 }
 
 // endregion
@@ -447,50 +227,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rmsd_baseline_identical_points() {
-        let points = vec![[1.0f64, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]];
-        let rmsd = baseline_rmsd(&points, &points);
-        assert!(rmsd.abs() < 1e-12);
+    fn baseline_ignores_rotation_and_translation() {
+        let cloud = [
+            [3.0f32, 0.5, 0.0],
+            [-3.0, 0.0, 0.2],
+            [0.0, 2.0, 0.0],
+            [0.5, -2.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ];
+        let moved = cloud.map(|[x, y, z]| [10.0 - y, x, z + 5.0]);
+        let (a, b) = (baseline_pack(&cloud), baseline_pack(&moved));
+        assert!(baseline_distance(ShapeKind::Chamfers, &a, &b) < 1e-5);
+        assert!(baseline_distance(ShapeKind::Hausdorffs, &a, &b) < 1e-5);
     }
 
     #[test]
-    fn rmsd_baseline_known_value() {
-        let a = vec![[0.0f64, 0.0, 0.0], [1.0, 0.0, 0.0]];
-        let b = vec![[1.0f64, 0.0, 0.0], [0.0, 0.0, 0.0]];
-        let rmsd = baseline_rmsd(&a, &b);
-        assert!((rmsd - 1.0).abs() < 1e-12);
-    }
-
-    #[test]
-    fn rmsd_baseline_f32_correctness() {
-        let a = vec![[0.0f32, 0.0, 0.0], [3.0, 4.0, 0.0]];
-        let b = vec![[0.0f32, 0.0, 0.0], [0.0, 0.0, 0.0]];
-        let rmsd = baseline_rmsd(&a, &b);
-        let expected = 12.5f32.sqrt();
-        assert!((rmsd - expected).abs() < 1e-5);
-    }
-
-    #[test]
-    fn kabsch_baseline_identity_rotation() {
-        let a = vec![[1.0f32, 0.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, -1.0, 0.0]];
-        let (rot, rmsd) = baseline_kabsch(&a, &a);
-        let identity = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
-        for (r, i) in rot.iter().zip(identity.iter()) {
-            assert!((r - i).abs() < 1e-10);
-        }
-        assert!(rmsd < 1e-10);
-    }
-
-    #[test]
-    fn umeyama_baseline_identity() {
-        let a = vec![[1.0f32, 0.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, -1.0, 0.0]];
-        let (rot, scale, rmsd) = baseline_umeyama(&a, &a);
-        let identity = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
-        for (r, i) in rot.iter().zip(identity.iter()) {
-            assert!((r - i).abs() < 1e-10);
-        }
-        assert!((scale - 1.0).abs() < 1e-10);
-        assert!(rmsd < 1e-10);
+    fn baseline_hausdorff_bounds_chamfer() {
+        let mut rng = StdRng::seed_from_u64(42);
+        let a = baseline_pack(&generate_point_cloud::<f32>(&mut rng, 32));
+        let b = baseline_pack(&generate_point_cloud::<f32>(&mut rng, 24));
+        let chamfer = baseline_distance(ShapeKind::Chamfers, &a, &b);
+        assert!(chamfer > 0.0 && chamfer <= baseline_distance(ShapeKind::Hausdorffs, &a, &b));
     }
 }
 
@@ -500,11 +257,11 @@ mod tests {
 
 fn main() {
     let settings = Settings::read();
-    capabilities::configure_thread();
+    Capabilities::cpu_enabled()
+        .configure_thread()
+        .expect("Failed to configure the thread");
     let mut criterion = numwars::configure_criterion(&settings);
-    bench_rmsd(&mut criterion, &settings);
-    bench_kabsch(&mut criterion, &settings);
-    bench_umeyama(&mut criterion, &settings);
+    bench_shapes(&mut criterion, &settings);
     criterion.final_summary();
 }
 

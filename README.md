@@ -377,8 +377,8 @@ Tuning knobs (environment variables):
 | `NUMWARS_BATCH_PER_CORE` | 2048    | Items per call, times the threads: elements, rows, points |
 | `NUMWARS_THREADS`        | 1       | Threads for NumKong and competitors, `0` for all cores    |
 | `NUMWARS_DIMS`           | 1536    | Vector length                                             |
-| `NUMWARS_DIMS_HEIGHT`    | 1024    | Rows of `C = A @ B.T` in GEMM-shaped suites               |
-| `NUMWARS_DIMS_WIDTH`     | 128     | Columns of `C = A @ B.T` in GEMM-shaped suites            |
+| `NUMWARS_DIMS_HEIGHT`    | 1024    | Rows of `C = A × Bᵀ` in GEMM-shaped suites                |
+| `NUMWARS_DIMS_WIDTH`     | 128     | Columns of `C = A × Bᵀ` in GEMM-shaped suites             |
 | `NUMWARS_DIMS_DEPTH`     | 1536    | Shared dimension of `A` and `B` in GEMM-shaped suites     |
 | `NUMWARS_SAMPLE_SIZE`    | 50      | Criterion samples per benchmark, Rust only                |
 | `NUMWARS_OUTPUT`         | table   | Human-readable `table` or machine-readable `json`, Python |

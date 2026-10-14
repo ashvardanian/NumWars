@@ -8,9 +8,10 @@
 //! NUMWARS_BATCH_PER_CORE  2048     Items per call, times the threads: elements, rows, points
 //! NUMWARS_THREADS         1        Threads for NumKong and competitors, `0` for all cores
 //! NUMWARS_DIMS            1536     Vector length
-//! NUMWARS_DIMS_HEIGHT     1024     Rows of `C = A @ B.T` in GEMM-shaped suites
-//! NUMWARS_DIMS_WIDTH      128      Columns of `C = A @ B.T` in GEMM-shaped suites
+//! NUMWARS_DIMS_HEIGHT     1024     Rows of `C = A × Bᵀ` in GEMM-shaped suites
+//! NUMWARS_DIMS_WIDTH      128      Columns of `C = A × Bᵀ` in GEMM-shaped suites
 //! NUMWARS_DIMS_DEPTH      1536     Shared dimension of `A` and `B` in GEMM-shaped suites
+//! NUMWARS_SHAPE_POINTS    32       Points per cloud in the shape-distance suite
 //! NUMWARS_SAMPLE_SIZE     50       Criterion samples per benchmark
 
 // Feature unification can switch on `ndarray/blas` for every binary in a `--features all` build,
@@ -127,6 +128,7 @@ pub struct Settings {
     pub dims_height: usize,
     pub dims_width: usize,
     pub dims_depth: usize,
+    pub shape_points: usize,
     pub sample_size: usize,
 }
 
@@ -153,6 +155,7 @@ impl Settings {
             dims_height: env_count("NUMWARS_DIMS_HEIGHT", 1024),
             dims_width: env_count("NUMWARS_DIMS_WIDTH", 128),
             dims_depth: env_count("NUMWARS_DIMS_DEPTH", 1536),
+            shape_points: env_count("NUMWARS_SHAPE_POINTS", 32),
             sample_size: env_count("NUMWARS_SAMPLE_SIZE", 50),
         };
         settings.print();
@@ -174,6 +177,7 @@ impl Settings {
         println!("- Dims height: {}", self.dims_height);
         println!("- Dims width: {}", self.dims_width);
         println!("- Dims depth: {}", self.dims_depth);
+        println!("- Shape points: {}", self.shape_points);
         println!("- Sample size: {}", self.sample_size);
     }
 
@@ -287,7 +291,7 @@ pub fn try_spawn_pool(threads: usize) -> Option<ThreadPool> {
     if threads <= 1 {
         return None;
     }
-    let pool = ThreadPool::try_spawn(topology(), threads).expect("Failed to spawn thread pool");
+    let pool = ThreadPool::spawn(topology(), threads).expect("Failed to spawn thread pool");
     Some(pool)
 }
 
@@ -302,8 +306,8 @@ where
     Matrix: TensorRef<Scalar, MAX_RANK>,
 {
     match pool {
-        Some(pool) => DotsPackedMatrix::try_pack_parallel(b, pool).expect("Failed to pack B"),
-        None => DotsPackedMatrix::try_pack(b).expect("Failed to pack B"),
+        Some(pool) => DotsPackedMatrix::new_parallel(b, pool).expect("Failed to pack B"),
+        None => DotsPackedMatrix::new(b).expect("Failed to pack B"),
     }
 }
 

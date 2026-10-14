@@ -39,8 +39,6 @@ except ImportError:
 try:
     import torch
     import torch.nn.functional as F
-
-    torch.set_num_threads(1)
 except ImportError:
     torch = None
 
@@ -84,10 +82,10 @@ def benchmark_numkong(
         values = nk.Tensor((rng.standard_normal((kv_length, row_width)) * 0.3).astype(np.float32)).astype(dtype_str)
     kv_offsets = np.array([0, kv_length], dtype=np.uint32)
     query_offsets = np.array([0, query_count], dtype=np.uint32)
-    packed = nk.attention_pack(keys, values, segment_offsets=kv_offsets, head_dim=head_dim, threads=1)
+    packed = nk.attention_pack(keys, values, key_offsets=kv_offsets, depth=head_dim, threads=settings.threads)
 
     duration = measure_average_duration(
-        lambda: nk.attention_packed(queries, packed, query_offsets=query_offsets, threads=1),
+        lambda: nk.attention_packed(queries, packed, query_offsets=query_offsets, threads=settings.threads),
         settings,
     )
     num_operations = attention_operations(kv_length, head_dim, query_count)
@@ -107,7 +105,7 @@ def benchmark_numkong(
 def benchmark_torch(
     kv_length: int, head_dim: int, query_count: int, dtype_str: str, settings: Settings
 ) -> BenchmarkResult:
-    dtype = {"f32": torch.float32, "bf16": torch.bfloat16}[dtype_str]
+    dtype = {"f32": torch.float32, "bf16": torch.bfloat16, "f16": torch.float16}[dtype_str]
     generator = torch.Generator().manual_seed(settings.seed)
     queries = torch.randn(1, HEAD_COUNT, query_count, head_dim, generator=generator).to(dtype) * 0.3
     keys = torch.randn(1, HEAD_COUNT, kv_length, head_dim, generator=generator).to(dtype) * 0.3
@@ -202,10 +200,12 @@ def main():
 
     candidates = [
         ("numkong", "bf16"),
+        ("numkong", "f16"),
         ("numkong", "e4m3"),
         ("numkong", "i8"),
         ("torch", "f32"),
         ("torch", "bf16"),
+        ("torch", "f16"),
         ("numpy", "f32"),
     ]
 
@@ -242,7 +242,7 @@ def main():
         print("No benchmarks were run.")
         return
 
-    print(f"Attention: {HEAD_COUNT} heads, Q({query_count}x{head_dim}) over KV({kv_length}x{head_dim})")
+    print(f"Attention: {HEAD_COUNT} heads, Q({query_count}×{head_dim}) over KV({kv_length}×{head_dim})")
     print()
     table_rows = [
         {

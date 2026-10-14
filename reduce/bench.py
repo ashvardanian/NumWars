@@ -2,7 +2,7 @@
 """
 Reduction benchmarks: NumKong vs NumPy.
 
-Covers flat-vector sum and row-wise L2 norms.
+Covers flat-vector sum, the indices of the minimum and maximum, and row-wise L2 norms.
 
 Can be run with uv:
     uv run --with numkong,numpy,tabulate reduce/bench.py
@@ -99,6 +99,8 @@ def benchmark_numpy(op: str, dtype_str: str, settings: Settings) -> BenchmarkRes
         x = build_vector(actual_elements, dtype_str, rng)
         if op == "sum":
             func = lambda: np.sum(x)
+        elif op == "minmax":
+            func = lambda: (np.argmin(x), np.argmax(x))
         else:
             raise ValueError(f"Unknown operation: {op}")
         bytes_processed = actual_elements * x.itemsize
@@ -133,9 +135,11 @@ def benchmark_numkong(op: str, dtype_str: str, settings: Settings) -> BenchmarkR
     else:
         actual_elements = settings.batch_size
         x = build_vector(actual_elements, dtype_str, rng)
+        t = nk.Tensor(x)
         if op == "sum":
-            t = nk.Tensor(x)
             func = lambda: nk.sum(t)
+        elif op == "minmax":
+            func = lambda: nk.minmax(t)
         else:
             raise ValueError(f"Unknown operation: {op}")
         bytes_processed = actual_elements * x.itemsize
@@ -200,6 +204,13 @@ def main():
         ("numkong", "sum", "i8"),
         ("numkong", "sum", "u8"),
         ("numkong", "sum", "bf16"),
+        ("numpy", "minmax", "f32"),
+        ("numpy", "minmax", "f64"),
+        ("numpy", "minmax", "u8"),
+        ("numkong", "minmax", "f32"),
+        ("numkong", "minmax", "f64"),
+        ("numkong", "minmax", "u8"),
+        ("numkong", "minmax", "bf16"),
         ("numpy", "norm", "f32"),
         ("numpy", "norm", "f64"),
         ("numkong", "norm", "f32"),

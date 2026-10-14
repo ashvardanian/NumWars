@@ -1,6 +1,9 @@
 # Dots Benchmarks
 
 Packed GEMM-style matrix multiplication benchmarks comparing NumKong against faer, matrixmultiply, ndarray, nalgebra, and NumPy.
+The SYRK rows multiply one matrix by its own transpose, C = A × Aᵀ, beside the GEMM rows' C = A × Bᵀ.
+NumKong fills the upper triangle, faer's triangular matmul fills the lower one, NumPy hands `a @ a.T` to BLAS `syrk`, and the other competitors compute the full product.
+Every SYRK row counts only the n(n+1)/2 useful pairs of one triangle times the depth, at a multiply and an add per pair and dimension like the GEMM rows, so a full product earns no credit for the mirrored half.
 
 ## Rust
 
@@ -19,16 +22,36 @@ Packed GEMM-style matrix multiplication benchmarks comparing NumKong against fae
 | `numkong::try_dots_packed_into` | _e5m2 → f32_ |  __746.22__ |
 | `numkong::try_dots_packed_into` | _e2m3 → f32_ | __1355.00__ |
 | `numkong::try_dots_packed_into` | _e3m2 → f32_ |  __693.43__ |
+| ___SYRK___                      |              |             |
+| `numkong::dots_symmetric_into`  | _i8 → i32_   |             |
+| `numkong::dots_symmetric_into`  | _u8 → u32_   |             |
+| `numkong::dots_symmetric_into`  | _bf16 → f32_ |             |
+| `numkong::dots_symmetric_into`  | _f16 → f32_  |             |
+| `faer triangular matmul`        | _f32 → f32_  |             |
+| `matrixmultiply::sgemm`         | _f32 → f32_  |             |
+| `ndarray::dot`                  | _f32 → f32_  |             |
+| `nalgebra::gemm`                | _f32 → f32_  |             |
+| `numkong::dots_symmetric_into`  | _f32 → f64_  |             |
+| `numkong::dots_symmetric_into`  | _e4m3 → f32_ |             |
+| `numkong::dots_symmetric_into`  | _e5m2 → f32_ |             |
+| `numkong::dots_symmetric_into`  | _e2m3 → f32_ |             |
+| `numkong::dots_symmetric_into`  | _e3m2 → f32_ |             |
 
 ## Python
 
-| Library               | Precision    |       GSO/s |
-| :-------------------- | :----------- | ----------: |
-| `numkong.dots_packed` | _i8 → i32_   | __2621.97__ |
-| `numkong.dots_packed` | _bf16 → f32_ | __1142.19__ |
-| `numpy.matmul`        | _f32 → f32_  | __1854.27__ |
-| `numkong.dots_packed` | _f16 → f32_  | __1134.69__ |
-| `numkong.dots_packed` | _f32 → f64_  |  __194.15__ |
+| Library                  | Precision    |       GSO/s |
+| :----------------------- | :----------- | ----------: |
+| `numkong.dots_packed`    | _i8 → i32_   | __2621.97__ |
+| `numkong.dots_packed`    | _bf16 → f32_ | __1142.19__ |
+| `numpy.matmul`           | _f32 → f32_  | __1854.27__ |
+| `numkong.dots_packed`    | _f16 → f32_  | __1134.69__ |
+| `numkong.dots_packed`    | _f32 → f64_  |  __194.15__ |
+| ___SYRK___               |              |             |
+| `numkong.dots_symmetric` | _i8 → i32_   |             |
+| `numkong.dots_symmetric` | _bf16 → f32_ |             |
+| `numpy.matmul`           | _f32 → f32_  |             |
+| `numkong.dots_symmetric` | _f16 → f32_  |             |
+| `numkong.dots_symmetric` | _f32 → f64_  |             |
 
 ## Run It
 
@@ -45,6 +68,10 @@ cargo bench --bench bench_dots --features bench_dots
 # Focus on float32
 NUMWARS_FILTER="dots/f32" \
 cargo bench --bench bench_dots --features bench_dots
+
+# Only the SYRK rows, 1024×1024 Gram matrices at 1536 dimensions
+NUMWARS_FILTER="dots/symmetric" \
+cargo bench --bench bench_dots --features bench_dots
 ```
 
 ### Python
@@ -52,4 +79,7 @@ cargo bench --bench bench_dots --features bench_dots
 ```bash
 # Default 1024×128×1536 workload, f32 only
 NUMWARS_FILTER='dots/numpy/f32' python dots/bench.py
+
+# Only the SYRK rows, 1024×1024 Gram matrices at 1536 dimensions
+NUMWARS_FILTER='dots/symmetric' python dots/bench.py
 ```

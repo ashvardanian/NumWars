@@ -1,45 +1,56 @@
-//! Benchmark for geospatial distance operations
+//! Benchmark for many-to-many geospatial distances
 //!
-//! Compares NumKong vs baseline and geo crate for geodesic distance metrics.
+//! Scores every row point against every column point into a row-major matrix, comparing NumKong's
+//! packed kernels against the `geo` crate and scalar baselines. Each point set packs once, outside
+//! the timed loop, as the dots suite packs its B operand.
+//!
+//! Competitors:
+//! - numkong (HaversinesPackedMatrix, VincentysPackedMatrix, SqEuclideans3D)
+//! - geo (Haversine on the same mean sphere, Karney's Geodesic on the same WGS-84 ellipsoid)
+//! - baseline (scalar loops over degrees, like the `geo` rows)
 //!
 //! Run with:
 //! ```bash
 //! cargo bench --features bench_geospatial --bench bench_geospatial
-//! NUMWARS_FILTER="haversine" cargo bench --features bench_geospatial
+//! NUMWARS_FILTER="haversines" cargo bench --features bench_geospatial
 //! ```
 //!
-//! Benchmark naming: geospatial/{metric}/{dtype}
-//! Examples: geospatial/haversine/f32, geospatial/haversine/f64
+//! Benchmark naming: geospatial/{metric}/{dtype}/{rows}x{columns}
+//! Examples: geospatial/haversines/f64/1024x128, geospatial/sqeuclideans3d/i32/1024x128
 
 use std::hint::black_box;
+use std::ops::Neg;
 
 use criterion::measurement::WallTime;
 use criterion::{BenchmarkGroup, Criterion, Throughput};
 use geo::{Distance, Geodesic, Haversine as GeoHaversine, Point as GeoPoint};
 use num_traits::Float;
-use numkong::{capabilities, Haversine, Vincenty};
+use numkong::{Capabilities, HaversinesPackedMatrix, SqEuclideans3D, VincentysPackedMatrix};
 use rand::distr::uniform::SampleUniform;
 use rand::rngs::StdRng;
 use rand::{Rng, RngExt, SeedableRng};
 
 use numwars::Settings;
 
+/// The IUGG mean Earth radius, which NumKong's and `geo`'s Haversine both use.
+const EARTH_RADIUS_METERS: f64 = 6_371_008.8;
+
 // region: Baseline Implementations
 
 fn baseline_haversine<T: Float>(latitude_a: T, longitude_a: T, latitude_b: T, longitude_b: T) -> T {
-    let earth_radius_km = T::from(6371.0).unwrap();
+    let earth_radius = T::from(EARTH_RADIUS_METERS).unwrap();
     let two = T::from(2.0).unwrap();
     let delta_latitude = (latitude_b - latitude_a).to_radians();
     let delta_longitude = (longitude_b - longitude_a).to_radians();
     let half_chord_squared = (delta_latitude / two).sin().powi(2)
         + latitude_a.to_radians().cos() * latitude_b.to_radians().cos() * (delta_longitude / two).sin().powi(2);
-    earth_radius_km * two * half_chord_squared.sqrt().asin()
+    earth_radius * two * half_chord_squared.sqrt().asin()
 }
 
 /// Baseline Vincenty inverse formula (iterative, WGS-84 ellipsoid).
 ///
 /// Computes the geodesic distance between two points on the WGS-84 ellipsoid
-/// using Vincenty's iterative method. Returns distance in kilometers.
+/// using Vincenty's iterative method. Returns distance in meters.
 fn baseline_vincenty<T: Float>(lat1: T, lon1: T, lat2: T, lon2: T) -> T {
     let a = T::from(6_378_137.0).unwrap(); // semi-major axis (meters)
     let f = T::from(1.0 / 298.257_223_563).unwrap(); // flattening
@@ -133,44 +144,26 @@ fn baseline_vincenty<T: Float>(lat1: T, lon1: T, lat2: T, lon2: T) -> T {
                         * (T::from(-3.0).unwrap() + T::from(4.0).unwrap() * sin_sigma * sin_sigma)
                         * (T::from(-3.0).unwrap() + T::from(4.0).unwrap() * cos_2sigma_m * cos_2sigma_m)));
 
-    let distance_meters = b * cap_a * (sigma - delta_sigma);
-
-    // Convert meters to kilometers
-    distance_meters / T::from(1000.0).unwrap()
+    b * cap_a * (sigma - delta_sigma)
 }
 
-fn baseline_haversine_batch<T: Float>(
-    a_lats: &[T],
-    a_lons: &[T],
-    b_lats: &[T],
-    b_lons: &[T],
-    result: &mut [T],
-) -> Option<()> {
-    let n = a_lats.len();
-    if a_lons.len() != n || b_lats.len() != n || b_lons.len() != n || result.len() != n {
-        return None;
-    }
-    for i in 0..n {
-        result[i] = baseline_haversine(a_lats[i], a_lons[i], b_lats[i], b_lons[i]);
-    }
-    Some(())
+/// Squared distance between two Earth-fixed points, exact in `u64` for `i32` centimeters.
+trait BaselineSqEuclidean3D: SqEuclideans3D + Copy {
+    fn baseline_sqeuclidean3d(a: [Self; 3], b: [Self; 3]) -> Self::Distance;
 }
 
-fn baseline_vincenty_batch<T: Float>(
-    a_lats: &[T],
-    a_lons: &[T],
-    b_lats: &[T],
-    b_lons: &[T],
-    result: &mut [T],
-) -> Option<()> {
-    let n = a_lats.len();
-    if a_lons.len() != n || b_lats.len() != n || b_lons.len() != n || result.len() != n {
-        return None;
+impl BaselineSqEuclidean3D for i32 {
+    fn baseline_sqeuclidean3d(a: [i32; 3], b: [i32; 3]) -> u64 {
+        let square = |axis: usize| (a[axis] as i64 - b[axis] as i64).unsigned_abs().pow(2);
+        square(0) + square(1) + square(2)
     }
-    for i in 0..n {
-        result[i] = baseline_vincenty(a_lats[i], a_lons[i], b_lats[i], b_lons[i]);
+}
+
+impl BaselineSqEuclidean3D for f64 {
+    fn baseline_sqeuclidean3d(a: [f64; 3], b: [f64; 3]) -> f64 {
+        let square = |axis: usize| (a[axis] - b[axis]).powi(2);
+        square(0) + square(1) + square(2)
     }
-    Some(())
 }
 
 // endregion
@@ -186,270 +179,197 @@ fn generate_random_coords<T: SampleUniform + PartialOrd + Copy>(
     (0..count).map(|_| rng.random_range(min..max)).collect()
 }
 
-// endregion
-
-// region: Per-Library Run Traits — Haversine
-
-trait RunBaselineHaversine: Sized {
-    fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _al: &[Self], _ao: &[Self], _bl: &[Self], _bo: &[Self]) {}
+/// Latitudes and longitudes in degrees, as `geo` and the baselines take them.
+struct Coordinates {
+    latitudes: Vec<f64>,
+    longitudes: Vec<f64>,
 }
 
-impl RunBaselineHaversine for f32 {
-    fn run(group: &mut BenchmarkGroup<'_, WallTime>, a_lats: &[f32], a_lons: &[f32], b_lats: &[f32], b_lons: &[f32]) {
-        let mut results = vec![0.0f32; a_lats.len()];
-        group.bench_function("baseline", |bench| {
-            bench.iter(|| {
-                black_box(baseline_haversine_batch(a_lats, a_lons, b_lats, b_lons, &mut results));
-                black_box(&results);
-            })
-        });
+impl Coordinates {
+    fn random(rng: &mut impl Rng, count: usize) -> Self {
+        Coordinates {
+            latitudes: generate_random_coords(rng, count, -90.0, 90.0),
+            longitudes: generate_random_coords(rng, count, -180.0, 180.0),
+        }
     }
-}
 
-impl RunBaselineHaversine for f64 {
-    fn run(group: &mut BenchmarkGroup<'_, WallTime>, a_lats: &[f64], a_lons: &[f64], b_lats: &[f64], b_lons: &[f64]) {
-        let mut results = vec![0.0f64; a_lats.len()];
-        group.bench_function("baseline", |bench| {
-            bench.iter(|| {
-                black_box(baseline_haversine_batch(a_lats, a_lons, b_lats, b_lons, &mut results));
-                black_box(&results);
-            })
-        });
+    /// Latitudes and longitudes in radians, as NumKong packs them.
+    fn radians(&self) -> (Vec<f64>, Vec<f64>) {
+        let radians = |degrees: &[f64]| degrees.iter().map(|degree| degree.to_radians()).collect();
+        (radians(&self.latitudes), radians(&self.longitudes))
     }
-}
 
-trait RunNumKongHaversine: Sized {
-    fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _al: &[Self], _ao: &[Self], _bl: &[Self], _bo: &[Self]) {}
-}
-
-impl RunNumKongHaversine for f32 {
-    fn run(group: &mut BenchmarkGroup<'_, WallTime>, a_lats: &[f32], a_lons: &[f32], b_lats: &[f32], b_lons: &[f32]) {
-        let mut results = vec![0.0f32; a_lats.len()];
-        group.bench_function("numkong", |bench| {
-            bench.iter(|| {
-                black_box(Haversine::haversine(a_lats, a_lons, b_lats, b_lons, &mut results));
-                black_box(&results);
-            })
-        });
-    }
-}
-
-impl RunNumKongHaversine for f64 {
-    fn run(group: &mut BenchmarkGroup<'_, WallTime>, a_lats: &[f64], a_lons: &[f64], b_lats: &[f64], b_lons: &[f64]) {
-        let mut results = vec![0.0f64; a_lats.len()];
-        group.bench_function("numkong", |bench| {
-            bench.iter(|| {
-                black_box(Haversine::haversine(a_lats, a_lons, b_lats, b_lons, &mut results));
-                black_box(&results);
-            })
-        });
-    }
-}
-
-trait RunGeoHaversine: Sized {
-    fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _al: &[Self], _ao: &[Self], _bl: &[Self], _bo: &[Self]) {}
-}
-
-impl RunGeoHaversine for f32 {
-    fn run(group: &mut BenchmarkGroup<'_, WallTime>, a_lats: &[f32], a_lons: &[f32], b_lats: &[f32], b_lons: &[f32]) {
-        let points_a: Vec<GeoPoint<f32>> = a_lats
+    fn pairs(&self) -> Vec<(f64, f64)> {
+        self.latitudes
             .iter()
-            .zip(a_lons)
-            .map(|(&la, &lo)| GeoPoint::new(lo, la))
-            .collect();
-        let points_b: Vec<GeoPoint<f32>> = b_lats
-            .iter()
-            .zip(b_lons)
-            .map(|(&la, &lo)| GeoPoint::new(lo, la))
-            .collect();
-        let mut results = vec![0.0f32; points_a.len()];
-        group.bench_function("geo", |bench| {
-            bench.iter(|| {
-                for (i, (a, b)) in points_a.iter().zip(&points_b).enumerate() {
-                    results[i] = GeoHaversine.distance(*a, *b);
-                }
-                black_box(&results);
-            })
-        });
+            .copied()
+            .zip(self.longitudes.iter().copied())
+            .collect()
+    }
+
+    fn geo_points(&self) -> Vec<GeoPoint<f64>> {
+        let points = self.latitudes.iter().zip(&self.longitudes);
+        points
+            .map(|(&latitude, &longitude)| GeoPoint::new(longitude, latitude))
+            .collect()
     }
 }
 
-impl RunGeoHaversine for f64 {
-    fn run(group: &mut BenchmarkGroup<'_, WallTime>, a_lats: &[f64], a_lons: &[f64], b_lats: &[f64], b_lons: &[f64]) {
-        let points_a: Vec<GeoPoint<f64>> = a_lats
-            .iter()
-            .zip(a_lons)
-            .map(|(&la, &lo)| GeoPoint::new(lo, la))
-            .collect();
-        let points_b: Vec<GeoPoint<f64>> = b_lats
-            .iter()
-            .zip(b_lons)
-            .map(|(&la, &lo)| GeoPoint::new(lo, la))
-            .collect();
-        let mut results = vec![0.0f64; points_a.len()];
-        group.bench_function("geo", |bench| {
-            bench.iter(|| {
-                for (i, (a, b)) in points_a.iter().zip(&points_b).enumerate() {
-                    results[i] = GeoHaversine.distance(*a, *b);
-                }
-                black_box(&results);
-            })
-        });
-    }
+/// Earth-fixed points within `radius` of the center on every axis.
+fn generate_random_points<T: SampleUniform + PartialOrd + Neg<Output = T> + Copy>(
+    rng: &mut impl Rng,
+    count: usize,
+    radius: T,
+) -> Vec<[T; 3]> {
+    (0..count)
+        .map(|_| std::array::from_fn(|_| rng.random_range(-radius..radius)))
+        .collect()
 }
 
 // endregion
 
-// region: Per-Library Run Traits — Vincenty
+// region: Per-Library Runs
 
-trait RunBaselineVincenty: Sized {
-    fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _al: &[Self], _ao: &[Self], _bl: &[Self], _bo: &[Self]) {}
-}
-
-impl RunBaselineVincenty for f32 {
-    fn run(group: &mut BenchmarkGroup<'_, WallTime>, a_lats: &[f32], a_lons: &[f32], b_lats: &[f32], b_lons: &[f32]) {
-        let mut results = vec![0.0f32; a_lats.len()];
-        group.bench_function("baseline", |bench| {
-            bench.iter(|| {
-                black_box(baseline_vincenty_batch(a_lats, a_lons, b_lats, b_lons, &mut results));
-                black_box(&results);
-            })
-        });
-    }
-}
-
-impl RunBaselineVincenty for f64 {
-    fn run(group: &mut BenchmarkGroup<'_, WallTime>, a_lats: &[f64], a_lons: &[f64], b_lats: &[f64], b_lons: &[f64]) {
-        let mut results = vec![0.0f64; a_lats.len()];
-        group.bench_function("baseline", |bench| {
-            bench.iter(|| {
-                black_box(baseline_vincenty_batch(a_lats, a_lons, b_lats, b_lons, &mut results));
-                black_box(&results);
-            })
-        });
-    }
-}
-
-trait RunNumKongVincenty: Sized {
-    fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _al: &[Self], _ao: &[Self], _bl: &[Self], _bo: &[Self]) {}
-}
-
-impl RunNumKongVincenty for f32 {
-    fn run(group: &mut BenchmarkGroup<'_, WallTime>, a_lats: &[f32], a_lons: &[f32], b_lats: &[f32], b_lons: &[f32]) {
-        let mut results = vec![0.0f32; a_lats.len()];
-        group.bench_function("numkong", |bench| {
-            bench.iter(|| {
-                black_box(Vincenty::vincenty(a_lats, a_lons, b_lats, b_lons, &mut results));
-                black_box(&results);
-            })
-        });
-    }
-}
-
-impl RunNumKongVincenty for f64 {
-    fn run(group: &mut BenchmarkGroup<'_, WallTime>, a_lats: &[f64], a_lons: &[f64], b_lats: &[f64], b_lons: &[f64]) {
-        let mut results = vec![0.0f64; a_lats.len()];
-        group.bench_function("numkong", |bench| {
-            bench.iter(|| {
-                black_box(Vincenty::vincenty(a_lats, a_lons, b_lats, b_lons, &mut results));
-                black_box(&results);
-            })
-        });
-    }
-}
-
-trait RunGeoVincenty: Sized {
-    fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _al: &[Self], _ao: &[Self], _bl: &[Self], _bo: &[Self]) {}
-}
-
-impl RunGeoVincenty for f32 {}
-
-impl RunGeoVincenty for f64 {
-    fn run(group: &mut BenchmarkGroup<'_, WallTime>, a_lats: &[f64], a_lons: &[f64], b_lats: &[f64], b_lons: &[f64]) {
-        let points_a: Vec<GeoPoint<f64>> = a_lats
-            .iter()
-            .zip(a_lons)
-            .map(|(&la, &lo)| GeoPoint::new(lo, la))
-            .collect();
-        let points_b: Vec<GeoPoint<f64>> = b_lats
-            .iter()
-            .zip(b_lons)
-            .map(|(&la, &lo)| GeoPoint::new(lo, la))
-            .collect();
-        let mut results = vec![0.0f64; points_a.len()];
-        group.bench_function("geo", |bench| {
-            bench.iter(|| {
-                for (i, (a, b)) in points_a.iter().zip(&points_b).enumerate() {
-                    results[i] = Geodesic.distance(*a, *b);
+/// Times `distance` from every row to every column into a row-major __[rows,columns]__ matrix.
+fn run_matrix<Point: Copy, Output: Copy + Default>(
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    library: &str,
+    rows: &[Point],
+    columns: &[Point],
+    distance: impl Fn(Point, Point) -> Output,
+) {
+    let mut results = vec![Output::default(); rows.len() * columns.len()];
+    group.bench_function(library, |bench| {
+        bench.iter(|| {
+            for (row_results, &row) in results.chunks_exact_mut(columns.len()).zip(rows) {
+                for (result, &column) in row_results.iter_mut().zip(columns) {
+                    *result = distance(row, column);
                 }
-                black_box(&results);
-            })
-        });
-    }
-}
-
-// endregion
-
-// region: Generic Helpers
-
-fn bench_haversine_dtype<T>(c: &mut Criterion, settings: &Settings, rng: &mut impl Rng, dtype: &str)
-where
-    T: Float + SampleUniform + RunNumKongHaversine + RunBaselineHaversine + RunGeoHaversine + 'static,
-{
-    let name = format!("geospatial/haversine/{dtype}");
-    if !settings.selects(&name) {
-        return;
-    }
-    let count = settings.batch_size();
-    let mut group = c.benchmark_group(name);
-    group.throughput(Throughput::Bytes((count * std::mem::size_of::<T>() * 4) as u64));
-    let a_lats = generate_random_coords(rng, count, T::from(-90.0).unwrap(), T::from(90.0).unwrap());
-    let a_lons = generate_random_coords(rng, count, T::from(-180.0).unwrap(), T::from(180.0).unwrap());
-    let b_lats = generate_random_coords(rng, count, T::from(-90.0).unwrap(), T::from(90.0).unwrap());
-    let b_lons = generate_random_coords(rng, count, T::from(-180.0).unwrap(), T::from(180.0).unwrap());
-    <T as RunNumKongHaversine>::run(&mut group, &a_lats, &a_lons, &b_lats, &b_lons);
-    <T as RunBaselineHaversine>::run(&mut group, &a_lats, &a_lons, &b_lats, &b_lons);
-    <T as RunGeoHaversine>::run(&mut group, &a_lats, &a_lons, &b_lats, &b_lons);
-    group.finish();
-}
-
-fn bench_vincenty_dtype<T>(c: &mut Criterion, settings: &Settings, rng: &mut impl Rng, dtype: &str)
-where
-    T: Float + SampleUniform + RunNumKongVincenty + RunBaselineVincenty + RunGeoVincenty + 'static,
-{
-    let name = format!("geospatial/vincenty/{dtype}");
-    if !settings.selects(&name) {
-        return;
-    }
-    let count = settings.batch_size();
-    let mut group = c.benchmark_group(name);
-    group.throughput(Throughput::Bytes((count * std::mem::size_of::<T>() * 4) as u64));
-    let a_lats = generate_random_coords(rng, count, T::from(-90.0).unwrap(), T::from(90.0).unwrap());
-    let a_lons = generate_random_coords(rng, count, T::from(-180.0).unwrap(), T::from(180.0).unwrap());
-    let b_lats = generate_random_coords(rng, count, T::from(-90.0).unwrap(), T::from(90.0).unwrap());
-    let b_lons = generate_random_coords(rng, count, T::from(-180.0).unwrap(), T::from(180.0).unwrap());
-    <T as RunNumKongVincenty>::run(&mut group, &a_lats, &a_lons, &b_lats, &b_lons);
-    <T as RunBaselineVincenty>::run(&mut group, &a_lats, &a_lons, &b_lats, &b_lons);
-    <T as RunGeoVincenty>::run(&mut group, &a_lats, &a_lons, &b_lats, &b_lons);
-    group.finish();
+            }
+            black_box(&results);
+        })
+    });
 }
 
 // endregion
 
 // region: Benchmarks
 
-/// Benchmark Haversine distance
-pub fn bench_haversine(c: &mut Criterion, settings: &Settings) {
-    let mut rng = StdRng::seed_from_u64(settings.seed.into());
-    bench_haversine_dtype::<f32>(c, settings, &mut rng, "f32");
-    bench_haversine_dtype::<f64>(c, settings, &mut rng, "f64");
+/// Opens the group `geospatial/{metric}/{dtype}/{rows}x{columns}`, or `None` when it is filtered out.
+fn open_group<'a>(
+    c: &'a mut Criterion,
+    settings: &Settings,
+    metric: &str,
+    dtype: &str,
+) -> Option<BenchmarkGroup<'a, WallTime>> {
+    let (rows, columns) = (settings.dims_height, settings.dims_width);
+    let name = format!("geospatial/{metric}/{dtype}/{rows}x{columns}");
+    if !settings.selects(&name) {
+        return None;
+    }
+    let mut group = c.benchmark_group(name);
+    group.throughput(Throughput::Elements((rows * columns) as u64));
+    Some(group)
 }
 
-/// Benchmark Vincenty distance
-pub fn bench_vincenty(c: &mut Criterion, settings: &Settings) {
+/// Benchmark great-circle distances on the IUGG mean sphere.
+pub fn bench_haversines(c: &mut Criterion, settings: &Settings) {
+    let Some(mut group) = open_group(c, settings, "haversines", "f64") else {
+        return;
+    };
     let mut rng = StdRng::seed_from_u64(settings.seed.into());
-    bench_vincenty_dtype::<f32>(c, settings, &mut rng, "f32");
-    bench_vincenty_dtype::<f64>(c, settings, &mut rng, "f64");
+    let rows = Coordinates::random(&mut rng, settings.dims_height);
+    let columns = Coordinates::random(&mut rng, settings.dims_width);
+
+    let ((row_latitudes, row_longitudes), (column_latitudes, column_longitudes)) = (rows.radians(), columns.radians());
+    let row_pack = HaversinesPackedMatrix::new(&row_latitudes, &row_longitudes).expect("Failed to pack rows");
+    let column_pack =
+        HaversinesPackedMatrix::new(&column_latitudes, &column_longitudes).expect("Failed to pack columns");
+    let mut meters = vec![0.0f64; settings.dims_height * settings.dims_width];
+    group.bench_function("numkong", |bench| {
+        bench.iter(|| {
+            row_pack
+                .haversines(&column_pack, &mut meters)
+                .expect("Haversine failed");
+            black_box(&meters);
+        })
+    });
+    run_matrix(
+        &mut group,
+        "baseline",
+        &rows.pairs(),
+        &columns.pairs(),
+        |(latitude_a, longitude_a), (latitude_b, longitude_b)| {
+            baseline_haversine(latitude_a, longitude_a, latitude_b, longitude_b)
+        },
+    );
+    run_matrix(&mut group, "geo", &rows.geo_points(), &columns.geo_points(), |a, b| {
+        GeoHaversine.distance(a, b)
+    });
+    group.finish();
+}
+
+/// Benchmark geodesic distances on the WGS-84 ellipsoid.
+pub fn bench_vincentys(c: &mut Criterion, settings: &Settings) {
+    let Some(mut group) = open_group(c, settings, "vincentys", "f64") else {
+        return;
+    };
+    let mut rng = StdRng::seed_from_u64(settings.seed.into());
+    let rows = Coordinates::random(&mut rng, settings.dims_height);
+    let columns = Coordinates::random(&mut rng, settings.dims_width);
+
+    let ((row_latitudes, row_longitudes), (column_latitudes, column_longitudes)) = (rows.radians(), columns.radians());
+    let row_pack = VincentysPackedMatrix::new(&row_latitudes, &row_longitudes).expect("Failed to pack rows");
+    let column_pack =
+        VincentysPackedMatrix::new(&column_latitudes, &column_longitudes).expect("Failed to pack columns");
+    let mut meters = vec![0.0f64; settings.dims_height * settings.dims_width];
+    group.bench_function("numkong", |bench| {
+        bench.iter(|| {
+            row_pack.vincentys(&column_pack, &mut meters).expect("Vincenty failed");
+            black_box(&meters);
+        })
+    });
+    run_matrix(
+        &mut group,
+        "baseline",
+        &rows.pairs(),
+        &columns.pairs(),
+        |(latitude_a, longitude_a), (latitude_b, longitude_b)| {
+            baseline_vincenty(latitude_a, longitude_a, latitude_b, longitude_b)
+        },
+    );
+    run_matrix(&mut group, "geo", &rows.geo_points(), &columns.geo_points(), |a, b| {
+        Geodesic.distance(a, b)
+    });
+    group.finish();
+}
+
+fn bench_sqeuclideans3d_dtype<T>(c: &mut Criterion, settings: &Settings, dtype: &str, radius: T)
+where
+    T: BaselineSqEuclidean3D + SampleUniform + PartialOrd + Neg<Output = T>,
+{
+    let Some(mut group) = open_group(c, settings, "sqeuclideans3d", dtype) else {
+        return;
+    };
+    let mut rng = StdRng::seed_from_u64(settings.seed.into());
+    let rows = generate_random_points(&mut rng, settings.dims_height, radius);
+    let columns = generate_random_points(&mut rng, settings.dims_width, radius);
+
+    let mut squares = vec![T::Distance::default(); rows.len() * columns.len()];
+    group.bench_function("numkong", |bench| {
+        bench.iter(|| {
+            T::sqeuclideans3d(&rows, &columns, &mut squares).expect("SqEuclideans3D failed");
+            black_box(&squares);
+        })
+    });
+    run_matrix(&mut group, "baseline", &rows, &columns, T::baseline_sqeuclidean3d);
+    group.finish();
+}
+
+/// Benchmark squared distances between Earth-fixed points: `i32` centimeters and `f64` meters.
+pub fn bench_sqeuclideans3d(c: &mut Criterion, settings: &Settings) {
+    bench_sqeuclideans3d_dtype(c, settings, "i32", 637_100_000i32);
+    bench_sqeuclideans3d_dtype(c, settings, "f64", 6_371_000.0f64);
 }
 
 // endregion
@@ -465,7 +385,7 @@ mod tests {
     fn haversine_baseline_correctness() {
         // New York to London: ~5570 km
         let distance = baseline_haversine(40.7128f64, -74.0060, 51.5074, -0.1278);
-        assert!((distance - 5570.0).abs() < 50.0);
+        assert!((distance - 5_570_000.0).abs() < 50_000.0);
     }
 
     #[test]
@@ -479,8 +399,8 @@ mod tests {
         // New York to London: ~5570 km (Vincenty is more precise on the ellipsoid)
         let distance = baseline_vincenty(40.7128f64, -74.0060, 51.5074, -0.1278);
         assert!(
-            (distance - 5570.0).abs() < 50.0,
-            "Expected ~5570 km, got {} km",
+            (distance - 5_570_000.0).abs() < 50_000.0,
+            "Expected ~5570 km, got {} m",
             distance
         );
     }
@@ -490,6 +410,16 @@ mod tests {
         let distance = baseline_vincenty(0.0f64, 0.0, 0.0, 0.0);
         assert!(distance.abs() < 1e-6);
     }
+
+    #[test]
+    fn sqeuclidean3d_baseline_exact() {
+        let far = 637_100_000i32;
+        assert_eq!(
+            i32::baseline_sqeuclidean3d([-far, 0, 0], [far, 0, 0]),
+            (2 * far as u64).pow(2)
+        );
+        assert_eq!(f64::baseline_sqeuclidean3d([0.0, 3.0, 4.0], [0.0, 0.0, 0.0]), 25.0);
+    }
 }
 
 // endregion
@@ -498,10 +428,13 @@ mod tests {
 
 fn main() {
     let settings = Settings::read();
-    capabilities::configure_thread();
+    Capabilities::cpu_enabled()
+        .configure_thread()
+        .expect("Failed to configure the thread");
     let mut criterion = numwars::configure_criterion(&settings);
-    bench_haversine(&mut criterion, &settings);
-    bench_vincenty(&mut criterion, &settings);
+    bench_haversines(&mut criterion, &settings);
+    bench_vincentys(&mut criterion, &settings);
+    bench_sqeuclideans3d(&mut criterion, &settings);
     criterion.final_summary();
 }
 

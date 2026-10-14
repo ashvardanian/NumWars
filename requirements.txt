@@ -2,11 +2,12 @@
 # Install with: pip install -r requirements.txt
 
 # Core numerical libraries
-numkong>=7.0.0
+numkong>=8.0.0-rc.1
 numpy>=2.2
 scipy>=1.15
 scikit-learn>=1.6
-geopy>=2.4
+pyproj>=3.7
+pot>=0.9.5
 
 # Exotic ML data types
 ml_dtypes>=0.5.0

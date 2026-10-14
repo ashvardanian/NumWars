@@ -2,7 +2,7 @@
 """
 Elementwise operation benchmarks: NumKong vs NumPy.
 
-Benchmarks add operations across multiple data types.
+Benchmarks add, scale (alpha * a + beta) and fma (alpha * a * b + beta * c) across multiple data types.
 
 Can be run with uv:
     uv run --with numkong,numpy,tabulate,ml_dtypes each/bench.py
@@ -76,71 +76,73 @@ def build_array(elements: int, dtype_str: str, rng: np.random.Generator) -> np.n
     return rng.uniform(-1.0, 1.0, size=(elements,)).astype(np.float32).astype(np_dtype)
 
 
-def benchmark_numkong_add(elements: int, dtype_str: str, settings: Settings) -> BenchmarkResult:
-    rng = np.random.default_rng(settings.seed)
-    a = build_array(elements, dtype_str, rng)
-    b = build_array(elements, dtype_str, rng)
+INPUT_COUNTS = {"add": 2, "scale": 1, "fma": 3}
 
+
+def timed_result(
+    library: str, operation: str, dtype_str: str, elements: int, func, settings: Settings
+) -> BenchmarkResult:
+    """Times `func`, which reads `INPUT_COUNTS[operation]` arrays of `elements` and writes one."""
+    duration = measure_average_duration(func, settings)
+    bytes_processed = (INPUT_COUNTS[operation] + 1) * elements * dtype_itemsize(dtype_str)
+    return BenchmarkResult(
+        library=library,
+        operation=operation,
+        input_dtype=dtype_str,
+        output_dtype=dtype_str,
+        display_signature=display_signature(dtype_str, dtype_str),
+        elements=elements,
+        duration_secs=duration,
+        throughput_gibs=bytes_processed / duration / 2**30,
+    )
+
+
+def benchmark_numkong(operation: str, elements: int, dtype_str: str, settings: Settings) -> BenchmarkResult:
+    rng = np.random.default_rng(settings.seed)
+    a, b, c = (build_array(elements, dtype_str, rng) for _ in range(3))
     if dtype_str == "bf16":
-        func = lambda: nk.add(a, b, a_dtype="bfloat16", b_dtype="bfloat16", out_dtype="bfloat16")
+        # NumPy has no bfloat16, so NumKong is told what the buffers hold
+        funcs = {
+            "add": lambda: nk.add(a, b, a_dtype="bfloat16", b_dtype="bfloat16", out_dtype="bfloat16"),
+            "scale": lambda: nk.scale(a, "bfloat16", alpha=2.5, beta=0.5),
+            "fma": lambda: nk.fma(a, b, c, "bfloat16", alpha=2.5, beta=0.5),
+        }
     else:
-        func = lambda: nk.add(a, b)
-
-    duration = measure_average_duration(func, settings)
-    itemsize = dtype_itemsize(dtype_str)
-    bytes_processed = 2 * elements * itemsize + elements * itemsize
-    return BenchmarkResult(
-        library="NumKong",
-        operation="add",
-        input_dtype=dtype_str,
-        output_dtype=dtype_str,
-        display_signature=display_signature(dtype_str, dtype_str),
-        elements=elements,
-        duration_secs=duration,
-        throughput_gibs=bytes_processed / duration / 2**30,
-    )
+        funcs = {
+            "add": lambda: nk.add(a, b),
+            "scale": lambda: nk.scale(a, alpha=2.5, beta=0.5),
+            "fma": lambda: nk.fma(a, b, c, alpha=2.5, beta=0.5),
+        }
+    return timed_result("NumKong", operation, dtype_str, elements, funcs[operation], settings)
 
 
-def benchmark_numpy_add(elements: int, dtype_str: str, settings: Settings) -> BenchmarkResult:
+def benchmark_numpy(operation: str, elements: int, dtype_str: str, settings: Settings) -> BenchmarkResult:
     rng = np.random.default_rng(settings.seed)
-    a = build_array(elements, dtype_str, rng)
-    b = build_array(elements, dtype_str, rng)
-    out = np.empty_like(a)
+    a, b, c = (build_array(elements, dtype_str, rng) for _ in range(3))
+    out, scratch = np.empty_like(a), np.empty_like(a)
 
-    func = lambda: np.add(a, b, out=out)
+    def scale():
+        np.multiply(a, a.dtype.type(2.5), out=out, casting="unsafe")
+        np.add(out, a.dtype.type(0.5), out=out, casting="unsafe")
 
-    duration = measure_average_duration(func, settings)
-    itemsize = dtype_itemsize(dtype_str)
-    bytes_processed = 2 * elements * itemsize + elements * itemsize
-    return BenchmarkResult(
-        library="NumPy",
-        operation="add",
-        input_dtype=dtype_str,
-        output_dtype=dtype_str,
-        display_signature=display_signature(dtype_str, dtype_str),
-        elements=elements,
-        duration_secs=duration,
-        throughput_gibs=bytes_processed / duration / 2**30,
-    )
+    def fma():
+        np.multiply(a, b, out=out)
+        np.multiply(out, a.dtype.type(2.5), out=out, casting="unsafe")
+        np.multiply(c, a.dtype.type(0.5), out=scratch, casting="unsafe")
+        np.add(out, scratch, out=out)
+
+    funcs = {"add": lambda: np.add(a, b, out=out), "scale": scale, "fma": fma}
+    return timed_result("NumPy", operation, dtype_str, elements, funcs[operation], settings)
 
 
 candidates = [
-    # add
-    ("numkong", "add", "f32"),
-    ("numkong", "add", "f64"),
-    ("numkong", "add", "f16"),
-    ("numkong", "add", "bf16"),
-    ("numkong", "add", "i8"),
-    ("numpy", "add", "f32"),
-    ("numpy", "add", "f64"),
-    ("numpy", "add", "f16"),
-    ("numpy", "add", "i8"),
+    (library, operation, dtype_str)
+    for operation in ("add", "scale", "fma")
+    for library, dtypes in (("numkong", ("f32", "f64", "f16", "bf16", "i8")), ("numpy", ("f32", "f64", "f16", "i8")))
+    for dtype_str in dtypes
 ]
 
-dispatch = {
-    ("numkong", "add"): benchmark_numkong_add,
-    ("numpy", "add"): benchmark_numpy_add,
-}
+dispatch = {"numkong": benchmark_numkong, "numpy": benchmark_numpy}
 
 
 def result_to_entry(result: BenchmarkResult) -> dict:
@@ -183,9 +185,7 @@ def main():
         if settings.output == "table":
             print(f"Benchmarking {benchmark_name} ({library_slug})")
 
-        func = dispatch[(library_slug, operation)]
-        result = func(elements, dtype_str, settings)
-        all_results.append(result)
+        all_results.append(dispatch[library_slug](operation, elements, dtype_str, settings))
 
     if settings.output == "json":
         print(
