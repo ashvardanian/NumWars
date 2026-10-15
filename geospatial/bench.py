@@ -156,9 +156,9 @@ def main() -> None:
             "f64",
             lambda: geodesic.inv(row_longitudes, row_latitudes, column_longitudes, column_latitudes)[2],
         ),
-        ("sqeuclideans3d", "NumKong", "i32", lambda: nk.sqeuclideans3d(*points["i32"])),
+        ("sqeuclideans3d", "NumKong", "i32", lambda: nk.sqeuclideans3d(*points["i32"], threads=settings.threads)),
         ("sqeuclideans3d", "SciPy", "i32", lambda: cdist(*points["i32"], "sqeuclidean")),
-        ("sqeuclideans3d", "NumKong", "f64", lambda: nk.sqeuclideans3d(*points["f64"])),
+        ("sqeuclideans3d", "NumKong", "f64", lambda: nk.sqeuclideans3d(*points["f64"], threads=settings.threads)),
         ("sqeuclideans3d", "SciPy", "f64", lambda: cdist(*points["f64"], "sqeuclidean")),
     ]
 

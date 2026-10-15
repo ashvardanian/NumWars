@@ -6,7 +6,8 @@ Scores every row cloud against every column cloud with the correspondence-free d
 replaced mesh alignment. Clouds pack once, outside the timed loop, centered and rotated onto their
 principal axes, and every kind takes the best of the 8 sign flips of those axes:
 - chamfers and hausdorffs: against SciPy's cKDTree over the same principal frames and flips
-- wassersteinprocrustes: NumKong only, as no Python library alternates exact transport with Kabsch
+- wassersteinprocrustes: against SciPy's linear_sum_assignment alternated with orthogonal_procrustes,
+  as between clouds of one size the exact transport plan is an assignment
 - gromovwassersteins: against POT's gromov_wasserstein2 over the same distance matrices
 
 Can be run with uv:
@@ -23,6 +24,8 @@ from dataclasses import dataclass
 from functools import partial
 
 import numpy as np
+from scipy.linalg import orthogonal_procrustes
+from scipy.optimize import linear_sum_assignment
 from scipy.spatial import cKDTree
 from scipy.spatial.distance import cdist
 
@@ -88,18 +91,41 @@ def scipy_distance(workload: str, a: np.ndarray, b: np.ndarray, a_tree: cKDTree,
     return best
 
 
+def scipy_wasserstein_procrustes(a: np.ndarray, b: np.ndarray) -> float:
+    """Wasserstein-Procrustes between two principal frames of one size: from each of the 8 sign flips,
+    the optimal assignment alternates with the Procrustes fit of its pairs while the cost falls."""
+    best = np.inf
+    for signs in SIGN_FLIPS:
+        rotation, cost = np.diag(signs), np.inf
+        while True:
+            squares = cdist(a, b @ rotation, "sqeuclidean")
+            rows, columns = linear_sum_assignment(squares)
+            matched = squares[rows, columns].mean()
+            if not matched < cost:
+                break
+            cost = matched
+            rotation = orthogonal_procrustes(b[columns], a[rows])[0]
+            # Like NumKong, each start stays among the rotations, or among the reflections, it began with
+            if np.linalg.det(rotation) * signs.prod() < 0:
+                left, _, right = np.linalg.svd(b[columns].T @ a[rows])
+                rotation = left @ np.diag([1.0, 1.0, -1.0]) @ right
+        best = min(best, cost)
+    return np.sqrt(best)
+
+
 def pairwise(rows: list, columns: list, distance) -> np.ndarray:
     """The [rows,columns] matrix of `distance` from every row to every column."""
     return np.array([[distance(row, column) for column in columns] for row in rows])
 
 
-def build_candidates(dtype_str: str, points: int, rng: np.random.Generator) -> list[tuple]:
+def build_candidates(dtype_str: str, points: int, threads: int, rng: np.random.Generator) -> list[tuple]:
     """Every (workload, library, output dtype, callable) row over one tile of fresh clouds."""
     rows, columns = build_clouds(points, dtype_str, rng), build_clouds(points, dtype_str, rng)
-    row_pack, column_pack = nk.shapes_pack(rows), nk.shapes_pack(columns)
+    row_pack, column_pack = nk.shapes_pack(rows, threads=threads), nk.shapes_pack(columns, threads=threads)
     output_dtype = {"f32": "f64", "f16": "f32"}[dtype_str]
     candidates = [
-        (kind, "NumKong", output_dtype, partial(getattr(nk, f"{kind}_packed"), row_pack, column_pack)) for kind in KINDS
+        (kind, "NumKong", output_dtype, partial(getattr(nk, f"{kind}_packed"), row_pack, column_pack, threads=threads))
+        for kind in KINDS
     ]
 
     row_frames, column_frames = (
@@ -120,6 +146,19 @@ def build_candidates(dtype_str: str, points: int, rng: np.random.Generator) -> l
                 ),
             )
         )
+    # f16 packs round their points to f16, which can tip a pair into another local optimum
+    if dtype_str == "f32":
+        expected = np.asarray(nk.wassersteinprocrustes_packed(row_pack, column_pack))[0, 0]
+        actual = scipy_wasserstein_procrustes(row_frames[0], column_frames[0])
+        assert np.isclose(actual, expected, rtol=1e-6), f"SciPy {actual} vs NumKong {expected}"
+    candidates.append(
+        (
+            "wassersteinprocrustes",
+            "SciPy",
+            "f64",
+            lambda: pairwise(row_frames, column_frames, scipy_wasserstein_procrustes),
+        )
+    )
     if ot is not None:
         row_distances = [cdist(frame, frame) for frame in row_frames]
         column_distances = [cdist(frame, frame) for frame in column_frames]
@@ -171,7 +210,7 @@ def main() -> None:
     rng = np.random.default_rng(settings.seed)
     results = []
     for input_dtype in ("f32", "f16"):
-        for workload, library, output_dtype, func in build_candidates(input_dtype, points, rng):
+        for workload, library, output_dtype, func in build_candidates(input_dtype, points, settings.threads, rng):
             if not settings.selects(benchmark_id(workload, library, input_dtype, points)):
                 continue
             duration = measure_average_duration(func, settings)

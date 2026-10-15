@@ -31,9 +31,11 @@ candle-core = {version = "0.9", optional = true, default-features = false}
 candle-nn = {version = "0.9", optional = true, default-features = false}
 faer = {version = "0.24", optional = true}
 geo = {version = "0.32", optional = true}
+lapjv = {version = "0.3", optional = true}
 matrixmultiply = {version = "0.3", optional = true, features = ["threading"]}
 nalgebra = {version = "0.34", optional = true}
 ndarray = {version = "0.17", optional = true}
+ndarray-stats = {version = "0.7", optional = true}
 openblas-src = {version = "0.10", optional = true, features = ["cblas"]}
 polars = {version = "0.53", optional = true, default-features = false, features = ["lazy"]}
 wide = {version = "1.1", optional = true}
@@ -57,9 +59,9 @@ bench_dots = [
   "openblas-src",
 ]
 bench_each = ["rand", "num-traits", "half", "ndarray", "nalgebra"]
-bench_geospatial = ["rand", "num-traits", "geo"]
+bench_geospatial = ["rand", "num-traits", "geo", "ndarray", "numkong/parallel", "forkunion"]
 bench_maxsim = ["rand", "num-traits", "half", "ndarray", "nalgebra"]
-bench_mesh = ["rand", "nalgebra"]
+bench_mesh = ["rand", "nalgebra", "lapjv", "numkong/parallel", "forkunion"]
 bench_reduce = ["rand", "num-traits", "ndarray", "polars", "argminmax"]
 bench_similarities = [
   "rand",
@@ -74,7 +76,7 @@ bench_similarities = [
   "blas-src",
   "openblas-src",
 ]
-bench_similarity = ["rand", "num-traits", "half", "ndarray", "nalgebra"]
+bench_similarity = ["rand", "num-traits", "half", "ndarray", "ndarray-stats", "nalgebra"]
 default = []
 
 [[bench]]

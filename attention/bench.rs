@@ -45,35 +45,48 @@ fn run_numkong<T: Attention + Clone>(
     let values = Tensor::<T>::full(&[kv_length, row_width], init).expect("Failed to create values");
     let kv_offsets = [0u32, kv_length as u32];
     let query_offsets = [0u32, query_count as u32];
-    let cache = AttentionPackedMatrix::<T>::new(&keys.view(), &values.view(), head_dim, &kv_offsets, None)
-        .expect("Failed to pack the KV cache");
 
     // Bidirectional, like candle's unmasked softmax
     match try_spawn_pool(threads) {
-        Some(mut pool) => group.bench_function("numkong", |b| {
-            b.iter(|| {
-                let outputs = cache
-                    .attention_parallel(
-                        black_box(&queries.view()),
-                        &query_offsets,
-                        None,
-                        usize::MAX,
-                        usize::MAX,
-                        &mut pool,
-                    )
-                    .expect("Attention failed");
-                black_box(outputs)
-            })
-        }),
-        None => group.bench_function("numkong", |b| {
-            b.iter(|| {
-                let outputs = cache
-                    .attention(black_box(&queries.view()), &query_offsets, None, usize::MAX, usize::MAX)
-                    .expect("Attention failed");
-                black_box(outputs)
-            })
-        }),
-    };
+        Some(mut pool) => {
+            let cache = AttentionPackedMatrix::<T>::new_parallel(
+                &keys.view(),
+                &values.view(),
+                head_dim,
+                &kv_offsets,
+                None,
+                &mut pool,
+            )
+            .expect("Failed to pack the KV cache");
+            group.bench_function("numkong", |b| {
+                b.iter(|| {
+                    let outputs = cache
+                        .attention_parallel(
+                            black_box(&queries.view()),
+                            &query_offsets,
+                            None,
+                            usize::MAX,
+                            usize::MAX,
+                            &mut pool,
+                        )
+                        .expect("Attention failed");
+                    black_box(outputs)
+                })
+            });
+        }
+        None => {
+            let cache = AttentionPackedMatrix::<T>::new(&keys.view(), &values.view(), head_dim, &kv_offsets, None)
+                .expect("Failed to pack the KV cache");
+            group.bench_function("numkong", |b| {
+                b.iter(|| {
+                    let outputs = cache
+                        .attention(black_box(&queries.view()), &query_offsets, None, usize::MAX, usize::MAX)
+                        .expect("Attention failed");
+                    black_box(outputs)
+                })
+            });
+        }
+    }
 }
 
 fn run_candle(

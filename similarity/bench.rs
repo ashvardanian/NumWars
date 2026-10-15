@@ -2,7 +2,8 @@
 //!
 //! Compares NumKong vs baseline Rust implementations for pairwise similarity metrics.
 //! Benchmarks spatial (dot, angular, euclidean, sqeuclidean), binary (hamming, jaccard), and probability
-//! (Jensen-Shannon, Kullback-Leibler) distances.
+//! (Jensen-Shannon, Kullback-Leibler) distances. Kullback-Leibler also runs against ndarray-stats'
+//! `kl_divergence`.
 //!
 //! Run with:
 //! ```bash
@@ -28,6 +29,7 @@ use std::ops::AddAssign;
 
 use criterion::measurement::WallTime;
 use criterion::{BenchmarkGroup, Criterion, Throughput};
+use ndarray_stats::EntropyExt;
 use num_traits::{Float, Num, NumCast};
 use numkong::{
     bf16, e2m3, e3m2, e4m3, e5m2, f16, u1x8, Angular, Capabilities, Dot, Euclidean, Hamming, Jaccard, JensenShannon,
@@ -701,6 +703,7 @@ impl RunBlasDot for e3m2 {}
 
 trait RunNalgebraEuclidean: Sized {
     fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _dims: usize, _v: Self) {}
+    fn run_squared(_g: &mut BenchmarkGroup<'_, WallTime>, _dims: usize, _v: Self) {}
 }
 impl RunNalgebraEuclidean for f32 {
     fn run(group: &mut BenchmarkGroup<'_, WallTime>, dims: usize, v: f32) {
@@ -708,12 +711,22 @@ impl RunNalgebraEuclidean for f32 {
         let b = nalgebra::DVector::<f32>::from_element(dims, v);
         group.bench_function("nalgebra", |bench| bench.iter(|| black_box((&a - &b).norm())));
     }
+    fn run_squared(group: &mut BenchmarkGroup<'_, WallTime>, dims: usize, v: f32) {
+        let a = nalgebra::DVector::<f32>::from_element(dims, v);
+        let b = nalgebra::DVector::<f32>::from_element(dims, v);
+        group.bench_function("nalgebra", |bench| bench.iter(|| black_box((&a - &b).norm_squared())));
+    }
 }
 impl RunNalgebraEuclidean for f64 {
     fn run(group: &mut BenchmarkGroup<'_, WallTime>, dims: usize, v: f64) {
         let a = nalgebra::DVector::<f64>::from_element(dims, v);
         let b = nalgebra::DVector::<f64>::from_element(dims, v);
         group.bench_function("nalgebra", |bench| bench.iter(|| black_box((&a - &b).norm())));
+    }
+    fn run_squared(group: &mut BenchmarkGroup<'_, WallTime>, dims: usize, v: f64) {
+        let a = nalgebra::DVector::<f64>::from_element(dims, v);
+        let b = nalgebra::DVector::<f64>::from_element(dims, v);
+        group.bench_function("nalgebra", |bench| bench.iter(|| black_box((&a - &b).norm_squared())));
     }
 }
 impl RunNalgebraEuclidean for i8 {}
@@ -727,6 +740,7 @@ impl RunNalgebraEuclidean for e3m2 {}
 
 trait RunNdarrayEuclidean: Sized {
     fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _dims: usize, _v: Self) {}
+    fn run_squared(_g: &mut BenchmarkGroup<'_, WallTime>, _dims: usize, _v: Self) {}
 }
 impl RunNdarrayEuclidean for f32 {
     fn run(group: &mut BenchmarkGroup<'_, WallTime>, dims: usize, v: f32) {
@@ -739,6 +753,16 @@ impl RunNdarrayEuclidean for f32 {
             })
         });
     }
+    fn run_squared(group: &mut BenchmarkGroup<'_, WallTime>, dims: usize, v: f32) {
+        let a = ndarray::Array1::<f32>::from_elem(dims, v);
+        let b = ndarray::Array1::<f32>::from_elem(dims, v);
+        group.bench_function("ndarray", |bench| {
+            bench.iter(|| {
+                let diff = &a - &b;
+                black_box(diff.dot(&diff))
+            })
+        });
+    }
 }
 impl RunNdarrayEuclidean for f64 {
     fn run(group: &mut BenchmarkGroup<'_, WallTime>, dims: usize, v: f64) {
@@ -748,6 +772,16 @@ impl RunNdarrayEuclidean for f64 {
             bench.iter(|| {
                 let diff = &a - &b;
                 black_box(diff.dot(&diff).sqrt())
+            })
+        });
+    }
+    fn run_squared(group: &mut BenchmarkGroup<'_, WallTime>, dims: usize, v: f64) {
+        let a = ndarray::Array1::<f64>::from_elem(dims, v);
+        let b = ndarray::Array1::<f64>::from_elem(dims, v);
+        group.bench_function("ndarray", |bench| {
+            bench.iter(|| {
+                let diff = &a - &b;
+                black_box(diff.dot(&diff))
             })
         });
     }
@@ -780,6 +814,16 @@ impl<T: KullbackLeibler> RunNumKongKullbackLeibler for T {
         group.bench_function("numkong", |bench| {
             bench.iter(|| black_box(KullbackLeibler::kullbackleibler(a, b)))
         });
+    }
+}
+
+trait RunNdarrayStatsKullbackLeibler: Sized {
+    fn run(_g: &mut BenchmarkGroup<'_, WallTime>, _a: &[Self], _b: &[Self]) {}
+}
+impl<T: Float + 'static> RunNdarrayStatsKullbackLeibler for T {
+    fn run(group: &mut BenchmarkGroup<'_, WallTime>, a: &[T], b: &[T]) {
+        let (a, b) = (ndarray::Array1::from(a.to_vec()), ndarray::Array1::from(b.to_vec()));
+        group.bench_function("ndarray-stats", |bench| bench.iter(|| black_box(a.kl_divergence(&b))));
     }
 }
 
@@ -829,7 +873,7 @@ where
 
 fn bench_sqeuclidean_dtype<T>(c: &mut Criterion, settings: &Settings, dtype: &str, init: T)
 where
-    T: Clone + RunBaselineSqEuclidean + RunNumKongSqEuclidean + 'static,
+    T: Clone + RunBaselineSqEuclidean + RunNumKongSqEuclidean + RunNalgebraEuclidean + RunNdarrayEuclidean + 'static,
 {
     let name = format!("similarity/sqeuclidean/{dtype}");
     if !settings.selects(&name) {
@@ -838,10 +882,13 @@ where
     let dims = settings.dims;
     let mut group = c.benchmark_group(name);
     group.throughput(Throughput::Bytes((2 * dims * std::mem::size_of::<T>()) as u64));
+    let extra_init = init.clone();
     let a = vec![init.clone(); dims];
     let b = vec![init; dims];
     <T as RunNumKongSqEuclidean>::run(&mut group, &a, &b);
     <T as RunBaselineSqEuclidean>::run(&mut group, &a, &b);
+    <T as RunNalgebraEuclidean>::run_squared(&mut group, dims, extra_init.clone());
+    <T as RunNdarrayEuclidean>::run_squared(&mut group, dims, extra_init);
     group.finish();
 }
 
@@ -890,7 +937,7 @@ where
 
 fn bench_kullbackleibler_dtype<T>(c: &mut Criterion, settings: &Settings, dtype: &str, init: T)
 where
-    T: Clone + RunBaselineKullbackLeibler + RunNumKongKullbackLeibler + 'static,
+    T: Clone + RunBaselineKullbackLeibler + RunNumKongKullbackLeibler + RunNdarrayStatsKullbackLeibler + 'static,
 {
     let name = format!("similarity/kullbackleibler/{dtype}");
     if !settings.selects(&name) {
@@ -903,6 +950,7 @@ where
     let b = vec![init; dims];
     <T as RunNumKongKullbackLeibler>::run(&mut group, &a, &b);
     <T as RunBaselineKullbackLeibler>::run(&mut group, &a, &b);
+    <T as RunNdarrayStatsKullbackLeibler>::run(&mut group, &a, &b);
     group.finish();
 }
 
@@ -1130,6 +1178,27 @@ mod tests {
         let b = vec![0.5f32, 0.5];
         // JS(P, P) = 0
         assert!(baseline_jensenshannon(&a, &b).unwrap().abs() < 1e-6);
+    }
+
+    #[test]
+    fn sqeuclidean_nalgebra_and_ndarray_match_numkong() {
+        Capabilities::cpu_enabled().configure_thread().unwrap();
+        let (a, b) = ([1.0f64, 2.0, 3.0], [4.0f64, 6.0, 3.0]);
+        let numkong = f64::sqeuclidean(&a, &b).unwrap();
+        let nalgebra =
+            (nalgebra::DVector::from_column_slice(&a) - nalgebra::DVector::from_column_slice(&b)).norm_squared();
+        let difference = ndarray::Array1::from(a.to_vec()) - ndarray::Array1::from(b.to_vec());
+        assert!((numkong - nalgebra).abs() < 1e-6 && (numkong - difference.dot(&difference)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn kullbackleibler_ndarray_stats_matches_numkong() {
+        Capabilities::cpu_enabled().configure_thread().unwrap();
+        let (p, q) = ([0.1f64, 0.2, 0.3, 0.4], [0.25f64, 0.25, 0.25, 0.25]);
+        let numkong = f64::kullbackleibler(&p, &q).unwrap();
+        let p_array = ndarray::Array1::from(p.to_vec());
+        let ndarray_stats = p_array.kl_divergence(&ndarray::Array1::from(q.to_vec())).unwrap();
+        assert!((numkong - ndarray_stats).abs() < 1e-6, "{numkong} vs {ndarray_stats}");
     }
 }
 

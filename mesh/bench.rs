@@ -4,8 +4,10 @@
 //! replaced mesh alignment: Chamfer, Hausdorff, Wasserstein-Procrustes and Gromov-Wasserstein.
 //! Clouds pack once, outside the timed loop, centered and rotated onto their principal axes, and
 //! every kind takes the best of the 8 sign flips of those axes. The nalgebra baseline packs the
-//! same way with `SymmetricEigen` and searches the same flips by brute force. The two transport
-//! kinds have no Rust competitor.
+//! same way with `SymmetricEigen` and searches the same flips by brute force. Between clouds of one
+//! size the exact transport plan is an assignment, so the lapjv baseline runs NumKong's
+//! Wasserstein-Procrustes alternation with `lapjv`'s assignments and nalgebra's SVD.
+//! Gromov-Wasserstein has no Rust competitor.
 //!
 //! Run with:
 //! ```bash
@@ -25,7 +27,7 @@ use numkong::{f16, Capabilities, NumberLike, Shapes, ShapesPackedMatrix};
 use rand::rngs::StdRng;
 use rand::{Rng, RngExt, SeedableRng};
 
-use numwars::Settings;
+use numwars::{try_spawn_pool, Settings};
 
 /// Row and column clouds per call, the square tile NumKong's own benchmarks time.
 const CLOUD_COUNT: usize = 8;
@@ -109,6 +111,46 @@ fn baseline_distance(kind: ShapeKind, a: &[Vector3<f64>], b: &[Vector3<f64>]) ->
     (0..8).map(flipped).fold(f64::INFINITY, f64::min)
 }
 
+/// Wasserstein-Procrustes between two packed clouds of one size: from each of the 8 sign flips,
+/// the optimal assignment alternates with the Kabsch fit of its pairs while the cost falls.
+fn baseline_wasserstein_procrustes(a: &[Vector3<f64>], b: &[Vector3<f64>]) -> f64 {
+    let count = a.len();
+    let mut squares = lapjv::Matrix::<f64>::zeros((count, count));
+    let mut best = f64::INFINITY;
+    for flip in 0..8 {
+        let signs = Vector3::from_fn(|axis, _| if flip >> axis & 1 == 1 { -1.0 } else { 1.0 });
+        let (mut rotation, mut cost) = (Matrix3::from_diagonal(&signs), f64::INFINITY);
+        loop {
+            for ((row, column), square) in squares.indexed_iter_mut() {
+                *square = (a[row] - rotation * b[column]).norm_squared();
+            }
+            let (assignment, _) = lapjv::lapjv(&squares).expect("Assignment failed");
+            let matched = assignment
+                .iter()
+                .enumerate()
+                .map(|(row, &column)| squares[(row, column)])
+                .sum::<f64>()
+                / count as f64;
+            if !(matched < cost) {
+                break;
+            }
+            cost = matched;
+            let covariance: Matrix3<f64> = assignment
+                .iter()
+                .enumerate()
+                .map(|(row, &column)| b[column] * a[row].transpose())
+                .sum();
+            let svd = covariance.svd(true, true);
+            let (left, right) = (svd.u.expect("Missing U"), svd.v_t.expect("Missing Vᵀ").transpose());
+            // Like NumKong, each start stays among the rotations, or among the reflections, it began with
+            let handedness = (signs.product() * (right * left.transpose()).determinant()).signum();
+            rotation = right * Matrix3::from_diagonal(&Vector3::new(1.0, 1.0, handedness)) * left.transpose();
+        }
+        best = best.min(cost);
+    }
+    best.sqrt()
+}
+
 // endregion
 
 // region: Data Generation
@@ -126,24 +168,43 @@ fn generate_point_cloud<T: NumberLike>(rng: &mut impl Rng, count: usize) -> Vec<
 
 // region: Per-Library Runs
 
-fn run_numkong<T: Shapes>(
+fn run_numkong<T: Shapes + Sync>(
     group: &mut BenchmarkGroup<'_, WallTime>,
     kind: ShapeKind,
     rows: &[Vec<[T; 3]>],
     columns: &[Vec<[T; 3]>],
+    threads: usize,
 ) {
     let row_slices: Vec<&[[T; 3]]> = rows.iter().map(Vec::as_slice).collect();
     let column_slices: Vec<&[[T; 3]]> = columns.iter().map(Vec::as_slice).collect();
-    let row_pack = ShapesPackedMatrix::<T>::new(&row_slices).expect("Failed to pack rows");
-    let column_pack = ShapesPackedMatrix::<T>::new(&column_slices).expect("Failed to pack columns");
+    let mut pool = try_spawn_pool(threads);
+    let mut pack = |slices: &[&[[T; 3]]]| match pool.as_mut() {
+        Some(pool) => ShapesPackedMatrix::<T>::new_parallel(slices, pool),
+        None => ShapesPackedMatrix::<T>::new(slices),
+    };
+    let row_pack = pack(&row_slices).expect("Failed to pack rows");
+    let column_pack = pack(&column_slices).expect("Failed to pack columns");
     let mut distances = vec![T::Distance::default(); rows.len() * columns.len()];
     group.bench_function("numkong", |bench| {
         bench.iter(|| {
-            match kind {
-                ShapeKind::Chamfers => row_pack.chamfers(&column_pack, &mut distances, None),
-                ShapeKind::Hausdorffs => row_pack.hausdorffs(&column_pack, &mut distances, None),
-                ShapeKind::WassersteinProcrustes => row_pack.wassersteinprocrustes(&column_pack, &mut distances, None),
-                ShapeKind::GromovWassersteins => row_pack.gromovwassersteins(&column_pack, &mut distances, None),
+            let columns = &column_pack;
+            match (kind, pool.as_mut()) {
+                (ShapeKind::Chamfers, None) => row_pack.chamfers(columns, &mut distances, None),
+                (ShapeKind::Chamfers, Some(pool)) => row_pack.chamfers_parallel(columns, &mut distances, None, pool),
+                (ShapeKind::Hausdorffs, None) => row_pack.hausdorffs(columns, &mut distances, None),
+                (ShapeKind::Hausdorffs, Some(pool)) => {
+                    row_pack.hausdorffs_parallel(columns, &mut distances, None, pool)
+                }
+                (ShapeKind::WassersteinProcrustes, None) => {
+                    row_pack.wassersteinprocrustes(columns, &mut distances, None)
+                }
+                (ShapeKind::WassersteinProcrustes, Some(pool)) => {
+                    row_pack.wassersteinprocrustes_parallel(columns, &mut distances, None, pool)
+                }
+                (ShapeKind::GromovWassersteins, None) => row_pack.gromovwassersteins(columns, &mut distances, None),
+                (ShapeKind::GromovWassersteins, Some(pool)) => {
+                    row_pack.gromovwassersteins_parallel(columns, &mut distances, None, pool)
+                }
             }
             .expect("Shape distances failed");
             black_box(&distances);
@@ -151,20 +212,22 @@ fn run_numkong<T: Shapes>(
     });
 }
 
-fn run_nalgebra<T: NumberLike + Copy>(
+/// Times `distance` from every row to every column cloud, both packed by `baseline_pack`.
+fn run_baseline<T: NumberLike + Copy>(
     group: &mut BenchmarkGroup<'_, WallTime>,
-    kind: ShapeKind,
+    library: &str,
     rows: &[Vec<[T; 3]>],
     columns: &[Vec<[T; 3]>],
+    distance: impl Fn(&[Vector3<f64>], &[Vector3<f64>]) -> f64,
 ) {
     let row_packs: Vec<_> = rows.iter().map(|cloud| baseline_pack(cloud)).collect();
     let column_packs: Vec<_> = columns.iter().map(|cloud| baseline_pack(cloud)).collect();
     let mut distances = vec![0.0f64; rows.len() * columns.len()];
-    group.bench_function("nalgebra", |bench| {
+    group.bench_function(library, |bench| {
         bench.iter(|| {
             for (row_distances, row) in distances.chunks_exact_mut(column_packs.len()).zip(&row_packs) {
-                for (distance, column) in row_distances.iter_mut().zip(&column_packs) {
-                    *distance = baseline_distance(kind, row, column);
+                for (result, column) in row_distances.iter_mut().zip(&column_packs) {
+                    *result = distance(row, column);
                 }
             }
             black_box(&distances);
@@ -176,7 +239,7 @@ fn run_nalgebra<T: NumberLike + Copy>(
 
 // region: Benchmarks
 
-fn bench_kind_dtype<T: Shapes + NumberLike + Copy>(
+fn bench_kind_dtype<T: Shapes + NumberLike + Copy + Sync>(
     c: &mut Criterion,
     settings: &Settings,
     kind: ShapeKind,
@@ -196,9 +259,15 @@ fn bench_kind_dtype<T: Shapes + NumberLike + Copy>(
 
     let mut group = c.benchmark_group(name);
     group.throughput(Throughput::Elements((CLOUD_COUNT * CLOUD_COUNT) as u64));
-    run_numkong(&mut group, kind, &rows, &columns);
-    if let ShapeKind::Chamfers | ShapeKind::Hausdorffs = kind {
-        run_nalgebra(&mut group, kind, &rows, &columns);
+    run_numkong(&mut group, kind, &rows, &columns, settings.threads);
+    match kind {
+        ShapeKind::Chamfers | ShapeKind::Hausdorffs => run_baseline(&mut group, "nalgebra", &rows, &columns, |a, b| {
+            baseline_distance(kind, a, b)
+        }),
+        ShapeKind::WassersteinProcrustes => {
+            run_baseline(&mut group, "lapjv", &rows, &columns, baseline_wasserstein_procrustes)
+        }
+        ShapeKind::GromovWassersteins => {}
     }
     group.finish();
 }
@@ -248,6 +317,22 @@ mod tests {
         let b = baseline_pack(&generate_point_cloud::<f32>(&mut rng, 24));
         let chamfer = baseline_distance(ShapeKind::Chamfers, &a, &b);
         assert!(chamfer > 0.0 && chamfer <= baseline_distance(ShapeKind::Hausdorffs, &a, &b));
+    }
+
+    #[test]
+    fn wasserstein_procrustes_baseline_matches_numkong() {
+        Capabilities::cpu_enabled().configure_thread().unwrap();
+        let mut rng = StdRng::seed_from_u64(42);
+        let a = generate_point_cloud::<f32>(&mut rng, 32);
+        let b = generate_point_cloud::<f32>(&mut rng, 32);
+        let row_pack = ShapesPackedMatrix::<f32>::new(&[a.as_slice()]).unwrap();
+        let column_pack = ShapesPackedMatrix::<f32>::new(&[b.as_slice()]).unwrap();
+        let mut numkong = [0.0f64];
+        row_pack
+            .wassersteinprocrustes(&column_pack, &mut numkong, None)
+            .unwrap();
+        let baseline = baseline_wasserstein_procrustes(&baseline_pack(&a), &baseline_pack(&b));
+        assert!((baseline - numkong[0]).abs() < 1e-5, "{baseline} vs {}", numkong[0]);
     }
 }
 

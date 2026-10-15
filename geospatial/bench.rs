@@ -7,6 +7,7 @@
 //! Competitors:
 //! - numkong (HaversinesPackedMatrix, VincentysPackedMatrix, SqEuclideans3D)
 //! - geo (Haversine on the same mean sphere, Karney's Geodesic on the same WGS-84 ellipsoid)
+//! - ndarray (the NumPy-style broadcast of `a[:, None] - b[None]` for SqEuclideans3D)
 //! - baseline (scalar loops over degrees, like the `geo` rows)
 //!
 //! Run with:
@@ -19,18 +20,19 @@
 //! Examples: geospatial/haversines/f64/1024x128, geospatial/sqeuclideans3d/i32/1024x128
 
 use std::hint::black_box;
-use std::ops::Neg;
+use std::ops::{Mul, Neg, Sub};
 
 use criterion::measurement::WallTime;
 use criterion::{BenchmarkGroup, Criterion, Throughput};
 use geo::{Distance, Geodesic, Haversine as GeoHaversine, Point as GeoPoint};
-use num_traits::Float;
+use ndarray::{Array2, Axis};
+use num_traits::{Float, Zero};
 use numkong::{Capabilities, HaversinesPackedMatrix, SqEuclideans3D, VincentysPackedMatrix};
 use rand::distr::uniform::SampleUniform;
 use rand::rngs::StdRng;
 use rand::{Rng, RngExt, SeedableRng};
 
-use numwars::Settings;
+use numwars::{try_spawn_pool, Settings};
 
 /// The IUGG mean Earth radius, which NumKong's and `geo`'s Haversine both use.
 const EARTH_RADIUS_METERS: f64 = 6_371_008.8;
@@ -149,10 +151,13 @@ fn baseline_vincenty<T: Float>(lat1: T, lon1: T, lat2: T, lon2: T) -> T {
 
 /// Squared distance between two Earth-fixed points, exact in `u64` for `i32` centimeters.
 trait BaselineSqEuclidean3D: SqEuclideans3D + Copy {
+    /// Holds a coordinate difference and a sum of three squares without overflow.
+    type Wide: From<Self> + Copy + Zero + Sub<Output = Self::Wide> + Mul<Output = Self::Wide>;
     fn baseline_sqeuclidean3d(a: [Self; 3], b: [Self; 3]) -> Self::Distance;
 }
 
 impl BaselineSqEuclidean3D for i32 {
+    type Wide = i64;
     fn baseline_sqeuclidean3d(a: [i32; 3], b: [i32; 3]) -> u64 {
         let square = |axis: usize| (a[axis] as i64 - b[axis] as i64).unsigned_abs().pow(2);
         square(0) + square(1) + square(2)
@@ -160,10 +165,23 @@ impl BaselineSqEuclidean3D for i32 {
 }
 
 impl BaselineSqEuclidean3D for f64 {
+    type Wide = f64;
     fn baseline_sqeuclidean3d(a: [f64; 3], b: [f64; 3]) -> f64 {
         let square = |axis: usize| (a[axis] - b[axis]).powi(2);
         square(0) + square(1) + square(2)
     }
+}
+
+/// The NumPy-style broadcast `((a[:, None] - b[None]) ** 2).sum(-1)` in ndarray, over points
+/// widened into `T::Wide`.
+fn ndarray_sqeuclideans3d<T: BaselineSqEuclidean3D>(rows: &[[T; 3]], columns: &[[T; 3]]) -> Array2<T::Wide> {
+    let widen = |points: &[[T; 3]]| {
+        Array2::from_shape_fn((points.len(), 3), |(index, axis)| T::Wide::from(points[index][axis]))
+    };
+    let differences = &widen(rows).insert_axis(Axis(1)) - &widen(columns).insert_axis(Axis(0));
+    differences
+        .mapv_into(|difference| difference * difference)
+        .sum_axis(Axis(2))
 }
 
 // endregion
@@ -346,7 +364,7 @@ pub fn bench_vincentys(c: &mut Criterion, settings: &Settings) {
 
 fn bench_sqeuclideans3d_dtype<T>(c: &mut Criterion, settings: &Settings, dtype: &str, radius: T)
 where
-    T: BaselineSqEuclidean3D + SampleUniform + PartialOrd + Neg<Output = T>,
+    T: BaselineSqEuclidean3D + SampleUniform + PartialOrd + Neg<Output = T> + Sync,
 {
     let Some(mut group) = open_group(c, settings, "sqeuclideans3d", dtype) else {
         return;
@@ -356,13 +374,21 @@ where
     let columns = generate_random_points(&mut rng, settings.dims_width, radius);
 
     let mut squares = vec![T::Distance::default(); rows.len() * columns.len()];
+    let mut pool = try_spawn_pool(settings.threads);
     group.bench_function("numkong", |bench| {
         bench.iter(|| {
-            T::sqeuclideans3d(&rows, &columns, &mut squares).expect("SqEuclideans3D failed");
+            match pool.as_mut() {
+                Some(pool) => T::sqeuclideans3d_parallel(&rows, &columns, &mut squares, pool),
+                None => T::sqeuclideans3d(&rows, &columns, &mut squares),
+            }
+            .expect("SqEuclideans3D failed");
             black_box(&squares);
         })
     });
     run_matrix(&mut group, "baseline", &rows, &columns, T::baseline_sqeuclidean3d);
+    group.bench_function("ndarray", |bench| {
+        bench.iter(|| black_box(ndarray_sqeuclideans3d(&rows, &columns)))
+    });
     group.finish();
 }
 
@@ -419,6 +445,21 @@ mod tests {
             (2 * far as u64).pow(2)
         );
         assert_eq!(f64::baseline_sqeuclidean3d([0.0, 3.0, 4.0], [0.0, 0.0, 0.0]), 25.0);
+    }
+
+    #[test]
+    fn sqeuclideans3d_ndarray_matches_numkong() {
+        Capabilities::cpu_enabled().configure_thread().unwrap();
+        let mut rng = StdRng::seed_from_u64(42);
+        let rows = generate_random_points(&mut rng, 5, 637_100_000i32);
+        let columns = generate_random_points(&mut rng, 3, 637_100_000i32);
+        let mut numkong = vec![0u64; rows.len() * columns.len()];
+        i32::sqeuclideans3d(&rows, &columns, &mut numkong).unwrap();
+        let ndarray_squares = ndarray_sqeuclideans3d(&rows, &columns);
+        assert!(ndarray_squares
+            .iter()
+            .zip(&numkong)
+            .all(|(&wide, &exact)| wide as u64 == exact));
     }
 }
 
