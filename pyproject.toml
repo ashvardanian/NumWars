@@ -24,6 +24,7 @@ version = "0.1.0"
 [project.optional-dependencies]
 all = ["numwars[similarity,each,dots,geospatial,mesh,reduce,similarities,attention,ml]"]
 attention = ["numkong>=8.0.0-rc.1", "numpy>=2.2", "torch>=2.6", "tabulate>=0.9"]
+cuda = ["numkong>=8.0.0-rc.1", "numpy>=2.2", "tabulate>=0.9", "ml_dtypes>=0.5.0", "torch>=2.9", "cupy-cuda13x>=14"]
 dots = ["numkong>=8.0.0-rc.1", "numpy>=2.2", "tabulate>=0.9", "ml_dtypes>=0.5.0"]
 each = ["numkong>=8.0.0-rc.1", "numpy>=2.2", "tabulate>=0.9", "ml_dtypes>=0.5.0"]
 geospatial = [

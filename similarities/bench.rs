@@ -14,6 +14,13 @@
 //! visits its upper triangle. Their throughput counts only the n(n+1)/2 pairs of that triangle
 //! times the depth, so a full product earns no credit for the mirrored half.
 //!
+//! A `cuda` build adds angular and Euclidean groups for each GPU in NUMWARS_DEVICES, named like
+//! `similarities/angulars/bf16<cuda:0>`, for every dtype NumKong has CUDA kernels for, counting
+//! pairs times the depth. Operands are random and live in unified memory, every round
+//! synchronizes the stream, and the first round is checked against NumKong's CPU kernel on the
+//! leading rows. The rival does what the CPU rivals do: a cuBLASLt product, then one epilogue
+//! kernel applying norms computed beforehand.
+//!
 //! Run with:
 //! ```bash
 //! cargo bench --features bench_similarities --bench bench_similarities
@@ -39,6 +46,16 @@ use numkong::{
 };
 
 use numwars::{pack_dots_matrix, propagate_thread_count, try_spawn_pool, Settings};
+
+#[cfg(feature = "cuda")]
+use std::ffi::{c_void, CString};
+
+#[cfg(feature = "cuda")]
+use cudarc::{cublaslt::sys::cudaDataType, driver::result as driver};
+#[cfg(feature = "cuda")]
+use numkong::{e2m1x2, e2m3, e3m2, e4m3, e5m2, f16, i4x2, u4x2, NumberLike, StorageElement, UnifiedAllocator};
+#[cfg(feature = "cuda")]
+use numwars::{gpu_check, gpu_devices, CublasLtGemm, CublasLtLayout, GpuDevice, GpuMetric, GpuScalar};
 
 // region: SYRK Baselines
 
@@ -805,6 +822,261 @@ pub fn bench_jaccards(c: &mut Criterion, settings: &Settings) {
 
 // endregion
 
+// region: GPU Rows
+
+/// Leading rows of a GPU result its first round is checked on.
+#[cfg(feature = "cuda")]
+const CHECKED_ROWS: usize = 16;
+
+/// Relative error a GPU row may show against the CPU, which sums the depth in another order.
+#[cfg(feature = "cuda")]
+const GPU_TOLERANCE: f64 = 1e-3;
+
+/// The rival's epilogue, turning its cuBLASLt products into distances in place from norms computed
+/// beforehand: inverse norms for angular distances, squared ones for Euclidean.
+#[cfg(feature = "cuda")]
+const EPILOGUE: &str = r#"
+extern "C" __global__ void epilogue(PRODUCT const *products, double const *row_norms, double const *column_norms,
+                                    REAL *distances, unsigned long long rows, unsigned long long columns) {
+    unsigned long long index = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x;
+    if (index >= rows * columns) return;
+    double product = products[index], row = row_norms[index / columns], column = column_norms[index % columns];
+#if ANGULAR
+    distances[index] = (REAL)(1 - product * row * column);
+#else
+    distances[index] = (REAL)sqrt(fmax(row + column - 2 * product, 0.0));
+#endif
+}
+"#;
+
+/// A rival added to a GPU group, given the metric, both operands and the CPU's leading rows.
+#[cfg(feature = "cuda")]
+type Rival<T> = fn(
+    &mut BenchmarkGroup<'_, WallTime>,
+    &str,
+    &GpuDevice,
+    GpuMetric,
+    &Tensor<T, UnifiedAllocator>,
+    &Tensor<T, UnifiedAllocator>,
+    &[f64],
+    bool,
+);
+
+/// Adds the cuBLASLt product and its epilogue to `group` as `cublaslt`, once its first round matches
+/// `expected`; a SYRK group's rival computes the full product, as the CPU rivals do.
+#[cfg(feature = "cuda")]
+fn bench_cublaslt<T: GpuScalar + NumberLike>(
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    name: &str,
+    device: &GpuDevice,
+    metric: GpuMetric,
+    a: &Tensor<T, UnifiedAllocator>,
+    b: &Tensor<T, UnifiedAllocator>,
+    expected: &[f64],
+    upper_only: bool,
+) {
+    let Some(types) = T::CUBLASLT else {
+        return;
+    };
+    let (rows, columns, depth) = (a.shape()[0], b.shape()[0], a.shape()[1]);
+    let gemm = match CublasLtGemm::new(device, types, CublasLtLayout::new(rows, columns, depth)) {
+        Ok(gemm) => gemm,
+        Err(error) => return println!("{name}/cublaslt is unavailable: {error}"),
+    };
+    let wide = types.output == cudaDataType::CUDA_R_64F;
+    let product = match types.output {
+        cudaDataType::CUDA_R_64F => "double",
+        cudaDataType::CUDA_R_32I => "int",
+        _ => "float",
+    };
+    let angular = matches!(metric, GpuMetric::Angulars) as u8;
+    let real = if wide { "double" } else { "float" };
+    let source = format!("#define PRODUCT {product}\n#define REAL {real}\n#define ANGULAR {angular}\n{EPILOGUE}");
+    let ptx = cudarc::nvrtc::compile_ptx(source).expect("NVRTC failed to compile the epilogue");
+    let image = CString::new(ptx.to_src()).expect("PTX holds no zero bytes");
+    let module = unsafe { driver::module::load_data(image.as_ptr().cast()) }.expect("Failed to load the epilogue");
+    let entry = CString::new("epilogue").expect("A plain name");
+    let function = unsafe { driver::module::get_function(module, entry) }.expect("No epilogue in the module");
+    let norms = |matrix: &Tensor<T, UnifiedAllocator>| {
+        let squares = matrix
+            .as_slice()
+            .chunks(depth)
+            .map(|row| row.iter().map(|value| value.to_f64().powi(2)).sum::<f64>());
+        let norms: Vec<f64> = match metric {
+            GpuMetric::Angulars => squares.map(|square: f64| 1.0 / square.sqrt()).collect(),
+            _ => squares.collect(),
+        };
+        Tensor::<f64, UnifiedAllocator>::from_slice_in(&norms, &[norms.len()], device.allocator())
+            .expect("Failed to allocate the norms")
+    };
+    let (row_norms, column_norms) = (norms(a), norms(b));
+    let mut products =
+        Tensor::<T::Product, _>::zeros_in(&[rows, columns], device.allocator()).expect("Failed to allocate");
+    let launch = |products: &mut Tensor<T::Product, UnifiedAllocator>| {
+        gemm.launch(a, b, products);
+        let (target, row_pointer, column_pointer) = (products.as_mut_ptr(), row_norms.as_ptr(), column_norms.as_ptr());
+        let (rows, columns) = (rows as u64, columns as u64);
+        let mut arguments = [
+            (&target as *const *mut T::Product).cast_mut().cast::<c_void>(),
+            (&row_pointer as *const *const f64).cast_mut().cast(),
+            (&column_pointer as *const *const f64).cast_mut().cast(),
+            (&target as *const *mut T::Product).cast_mut().cast(),
+            (&rows as *const u64).cast_mut().cast(),
+            (&columns as *const u64).cast_mut().cast(),
+        ];
+        let blocks = (rows * columns).div_ceil(256) as u32;
+        unsafe {
+            driver::launch_kernel(
+                function,
+                (blocks, 1, 1),
+                (256, 1, 1),
+                0,
+                device.stream.cast(),
+                &mut arguments,
+            )
+        }
+        .expect("Failed to launch the epilogue");
+        device.synchronize();
+    };
+    launch(&mut products);
+    let checked = rows.min(CHECKED_ROWS) * columns;
+    let found: Vec<f64> = match wide {
+        true => unsafe { std::slice::from_raw_parts(products.as_ptr().cast::<f64>(), checked) }.to_vec(),
+        false => unsafe { std::slice::from_raw_parts(products.as_ptr().cast::<f32>(), checked) }
+            .iter()
+            .map(|&value| value.into())
+            .collect(),
+    };
+    match gpu_check(
+        &format!("{name}/cublaslt"),
+        &found,
+        expected,
+        columns,
+        upper_only,
+        GPU_TOLERANCE,
+    ) {
+        Ok(()) => {
+            group.bench_function("cublaslt", |bench| bench.iter(|| launch(&mut products)));
+        }
+        Err(error) => println!("Skipping a rival that {error}"),
+    }
+    unsafe { driver::module::unload(module) }.expect("Failed to unload the epilogue");
+}
+
+#[cfg(feature = "cuda")]
+fn cpu_angulars<T: Angulars>(rows: &Tensor<T>, packed: &DotsPackedMatrix<T>) -> Tensor<T::SpatialResult> {
+    rows.angulars_packed(packed).expect("CPU angulars failed")
+}
+
+#[cfg(feature = "cuda")]
+fn cpu_euclideans<T: Euclideans>(rows: &Tensor<T>, packed: &DotsPackedMatrix<T>) -> Tensor<T::SpatialResult> {
+    rows.euclideans_packed(packed).expect("CPU euclideans failed")
+}
+
+/// GEMM and SYRK groups of `metric` over `T` on each GPU, over random operands in unified memory,
+/// each round synchronized and each first round checked against NumKong's CPU kernel.
+#[cfg(feature = "cuda")]
+fn bench_metric_gpu<T: GpuScalar, Output: StorageElement + Default + Into<f64>>(
+    c: &mut Criterion,
+    settings: &Settings,
+    devices: &[GpuDevice],
+    (metric, family): (GpuMetric, &str),
+    dtype: &str,
+    reference: fn(&Tensor<T>, &DotsPackedMatrix<T>) -> Tensor<Output>,
+    rival: Option<Rival<T>>,
+) {
+    let (count, depth) = (settings.batch_size(), settings.dims);
+    let seed = u64::from(settings.seed);
+    for device in devices {
+        for symmetric in [false, true] {
+            let kernel = if symmetric { "symmetric/" } else { "" };
+            let name = format!("similarities/{kernel}{family}/{dtype}{}", device.label());
+            if !settings.selects(&name) {
+                continue;
+            }
+            let a = device.random::<T>(&[count, depth], seed);
+            let b = (!symmetric).then(|| device.random::<T>(&[count, depth], seed + 1));
+            let b = b.as_ref().unwrap_or(&a);
+            let packed = match symmetric {
+                true => None,
+                false => device.pack(b),
+            };
+            let mut distances =
+                Tensor::<Output, _>::zeros_in(&[count, count], device.allocator()).expect("Failed to allocate");
+            let launch = |distances: &mut Tensor<Output, UnifiedAllocator>| -> Option<()> {
+                match &packed {
+                    Some(packed) => device.packed(metric, &a, packed, distances),
+                    None => device.symmetric(metric, &a, distances),
+                }?;
+                device.synchronize();
+                Some(())
+            };
+            if (!symmetric && packed.is_none()) || launch(&mut distances).is_none() {
+                println!("{name} is unavailable: NumKong has no CUDA kernel for {dtype}");
+                continue;
+            }
+            let leading = count.min(CHECKED_ROWS);
+            let values = leading * depth / T::dimensions_per_value();
+            let rows =
+                Tensor::<T>::from_slice(&a.as_slice()[..values], &[leading, depth]).expect("Failed to copy rows");
+            let expected = reference(&rows, &DotsPackedMatrix::new(b).expect("Failed to pack on the CPU"));
+            let expected: Vec<f64> = expected.as_slice().iter().map(|&value| value.into()).collect();
+            gpu_check(&name, distances.as_slice(), &expected, count, symmetric, GPU_TOLERANCE)
+                .unwrap_or_else(|error| panic!("{error}"));
+            let mut group = c.benchmark_group(&name);
+            let pairs = if symmetric {
+                count * (count + 1) / 2
+            } else {
+                count * count
+            };
+            group.throughput(Throughput::Elements((pairs * depth) as u64));
+            group.bench_function("numkong", |bench| bench.iter(|| launch(&mut distances)));
+            if let Some(rival) = rival {
+                rival(&mut group, &name, device, metric, &a, b, &expected, symmetric);
+            }
+            group.finish();
+        }
+    }
+}
+
+/// Both metrics of `T` on each GPU.
+#[cfg(feature = "cuda")]
+fn bench_dtype_gpu<T, Output>(
+    c: &mut Criterion,
+    settings: &Settings,
+    devices: &[GpuDevice],
+    dtype: &str,
+    rival: Option<Rival<T>>,
+) where
+    T: GpuScalar + Angulars<SpatialResult = Output> + Euclideans<SpatialResult = Output>,
+    Output: StorageElement + Default + Into<f64>,
+{
+    let angulars = (GpuMetric::Angulars, "angulars");
+    let euclideans = (GpuMetric::Euclideans, "euclideans");
+    bench_metric_gpu(c, settings, devices, angulars, dtype, cpu_angulars::<T>, rival);
+    bench_metric_gpu(c, settings, devices, euclideans, dtype, cpu_euclideans::<T>, rival);
+}
+
+/// Every dtype NumKong's CUDA kernels take, on each GPU; cuBLASLt races the ones it multiplies.
+#[cfg(feature = "cuda")]
+fn bench_similarities_gpu(c: &mut Criterion, settings: &Settings, devices: &[GpuDevice]) {
+    bench_dtype_gpu::<f32, _>(c, settings, devices, "f32", Some(bench_cublaslt::<f32>));
+    bench_dtype_gpu::<f64, _>(c, settings, devices, "f64", Some(bench_cublaslt::<f64>));
+    bench_dtype_gpu::<i8, _>(c, settings, devices, "i8", Some(bench_cublaslt::<i8>));
+    bench_dtype_gpu::<u8, _>(c, settings, devices, "u8", None);
+    bench_dtype_gpu::<bf16, _>(c, settings, devices, "bf16", Some(bench_cublaslt::<bf16>));
+    bench_dtype_gpu::<f16, _>(c, settings, devices, "f16", Some(bench_cublaslt::<f16>));
+    bench_dtype_gpu::<e4m3, _>(c, settings, devices, "e4m3", Some(bench_cublaslt::<e4m3>));
+    bench_dtype_gpu::<e5m2, _>(c, settings, devices, "e5m2", None);
+    bench_dtype_gpu::<e2m3, _>(c, settings, devices, "e2m3", None);
+    bench_dtype_gpu::<e3m2, _>(c, settings, devices, "e3m2", None);
+    bench_dtype_gpu::<e2m1x2, _>(c, settings, devices, "e2m1", None);
+    bench_dtype_gpu::<i4x2, _>(c, settings, devices, "i4", None);
+    bench_dtype_gpu::<u4x2, _>(c, settings, devices, "u4", None);
+}
+
+// endregion
+
 // region: Tests
 
 // Without `--test`, the `harness = false` build strips every `#[test]` and leaves these helpers unused
@@ -945,16 +1217,20 @@ mod tests {
 // region: Main
 
 fn main() {
-    let settings = Settings::read();
+    let settings = Settings::read("similarities");
     Capabilities::cpu_enabled()
         .configure_thread()
         .expect("Failed to configure the thread");
     propagate_thread_count(settings.threads);
+    #[cfg(feature = "cuda")]
+    let devices = gpu_devices(&settings);
     let mut criterion = numwars::configure_criterion(&settings);
     bench_angulars(&mut criterion, &settings);
     bench_euclideans(&mut criterion, &settings);
     bench_hammings(&mut criterion, &settings);
     bench_jaccards(&mut criterion, &settings);
+    #[cfg(feature = "cuda")]
+    bench_similarities_gpu(&mut criterion, &settings, &devices);
     criterion.final_summary();
 }
 

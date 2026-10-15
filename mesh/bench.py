@@ -201,7 +201,7 @@ def result_to_entry(result: BenchmarkResult) -> dict:
 
 
 def main() -> None:
-    settings = read_settings()
+    settings = read_settings("mesh")
     if settings.output == "table":
         print_settings(settings)
     points = settings.shape_points

@@ -171,7 +171,7 @@ pub fn bench_maxsim(c: &mut Criterion, settings: &Settings) {
 // region: Main
 
 fn main() {
-    let settings = Settings::read();
+    let settings = Settings::read("maxsim");
     Capabilities::cpu_enabled()
         .configure_thread()
         .expect("Failed to configure the thread");

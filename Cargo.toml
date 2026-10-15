@@ -29,6 +29,7 @@ argminmax = {version = "0.6", optional = true, default-features = false, feature
 blas-src = {version = "0.14", optional = true, default-features = false, features = ["openblas"]}
 candle-core = {version = "0.9", optional = true, default-features = false}
 candle-nn = {version = "0.9", optional = true, default-features = false}
+cudarc = {version = "0.19", optional = true, default-features = false, features = ["std", "cublas", "cublaslt", "nvrtc", "cuda-13000", "dynamic-loading"]}
 faer = {version = "0.24", optional = true}
 geo = {version = "0.32", optional = true}
 lapjv = {version = "0.3", optional = true}
@@ -77,6 +78,8 @@ bench_similarities = [
   "openblas-src",
 ]
 bench_similarity = ["rand", "num-traits", "half", "ndarray", "ndarray-stats", "nalgebra"]
+# GPU rows of the `dots`, `similarities` and `attention` suites, against cuBLASLt
+cuda = ["numkong/cuda", "dep:cudarc", "rand"]
 default = []
 
 [[bench]]

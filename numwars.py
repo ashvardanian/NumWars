@@ -12,6 +12,7 @@ NUMWARS_DIMS_HEIGHT     1024     Rows of `C = A @ B.T` in GEMM-shaped suites
 NUMWARS_DIMS_WIDTH      128      Columns of `C = A @ B.T` in GEMM-shaped suites
 NUMWARS_DIMS_DEPTH      1536     Shared dimension of `A` and `B` in GEMM-shaped suites
 NUMWARS_SHAPE_POINTS    32       Points per cloud in the shape-distance suite
+NUMWARS_DEVICES         cuda:0   CUDA devices in GPU suites, like `cuda:0,cuda:1`, one row per device
 NUMWARS_OUTPUT          table    Human-readable `table` or machine-readable `json`
 NUMWARS_SCIPY           false    Whether the `similarity` suite also times SciPy
 """
@@ -20,6 +21,7 @@ import os
 import re
 import secrets
 import time
+import weakref
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, TypeVar
@@ -120,12 +122,16 @@ except ImportError:
 
 # region: Settings
 
+# Suites that put rows on a GPU, and so accept `NUMWARS_DEVICES`.
+GPU_SUITES = ("dots", "similarities", "attention")
+
 
 @dataclass(frozen=True)
 class Settings:
     """Every `NUMWARS_*` setting, read once at the top of `main` and passed down. Mirrors the Rust
     `Settings` field for field, less `sample_size` and plus `output`."""
 
+    devices: list[int] | None
     filter: str
     filter_pattern: re.Pattern[str] | None
     seed: int
@@ -150,18 +156,27 @@ class Settings:
         return self.batch_per_core * self.threads
 
 
-def read_settings() -> Settings:
-    """Reads every `NUMWARS_*` variable, exiting with status 1 on the first that does not parse."""
-    if env_text("NUMWARS_DEVICES"):
-        raise SystemExit(
-            "NUMWARS_DEVICES is unsupported by these CPU suites; GPU device selection lives in NumKong's native benchmarks"
-        )
+def read_settings(suite: str) -> Settings:
+    """Reads every `NUMWARS_*` variable `suite` uses, exiting with status 1 on the first that does not parse."""
+    devices = None
+    if selection := env_text("NUMWARS_DEVICES"):
+        devices = []
+        for item in selection.split(","):
+            match = re.fullmatch(r"cuda:([0-9]+)", item)
+            if match is None:
+                raise SystemExit("NUMWARS_DEVICES requires CUDA selectors such as cuda:0,cuda:1")
+            # A repeated ordinal would name two rows identically, so the first wins.
+            if int(match[1]) not in devices:
+                devices.append(int(match[1]))
+        if suite not in GPU_SUITES:
+            raise SystemExit(f"NUMWARS_DEVICES is unsupported by the {suite} suite, which has no GPU rows")
     filter = env_text("NUMWARS_FILTER") or ""
     try:
         filter_pattern = re.compile(filter) if filter else None
     except re.error:
         filter_pattern = None
     return Settings(
+        devices=devices,
         filter=filter,
         filter_pattern=filter_pattern,
         seed=env_seed("NUMWARS_SEED", 42),
@@ -180,6 +195,8 @@ def read_settings() -> Settings:
 
 def print_settings(settings: Settings) -> None:
     """Prints every setting as "- Name: value", in the grammar it is read in."""
+    if settings.devices is not None:
+        print("- Devices: " + ",".join(f"cuda:{ordinal}" for ordinal in settings.devices))
     print(f"- Seed: {settings.seed}")
     print(f"- Filter: {settings.filter or 'none'}")
     print(f"- Warm-up: {spell_duration(settings.warmup)}")
@@ -195,6 +212,79 @@ def print_settings(settings: Settings) -> None:
 
 
 # endregion: Settings
+
+# region: GPU Devices
+
+
+@dataclass(frozen=True)
+class GpuDevice:
+    """One GPU a suite puts rows on: its ordinal, the NumKong capabilities it dispatches with, and a
+    NumKong stream on it, freed with the device. Operands are PyTorch tensors on it, which NumKong
+    imports through DLPack, as no other Python library holds BF16 and FP8 on a GPU."""
+
+    ordinal: int
+    capabilities: Any
+    stream: int
+
+    @property
+    def label(self) -> str:
+        """The suffix naming this device's rows, like `<cuda:0>`."""
+        return f"<cuda:{self.ordinal}>"
+
+
+def gpu_devices(settings: Settings) -> list[GpuDevice]:
+    """The GPUs that carry rows: each one `NUMWARS_DEVICES` names, refusing the run when one cannot be
+    opened, or else device zero, skipped without a CUDA build of NumKong, PyTorch's, or a GPU."""
+    import numkong as nk
+
+    requested = settings.devices is not None
+    if not requested and nk.cuda_count_devices() == 0:
+        return []
+    try:
+        import torch
+    except ImportError as error:
+        if requested:
+            raise SystemExit(f"GPU rows hold their operands in PyTorch tensors: {error}") from error
+        return []
+    devices = []
+    for ordinal in settings.devices if requested else [0]:
+        try:
+            if ordinal >= torch.cuda.device_count():
+                raise ValueError("PyTorch sees no such device")
+            capabilities = nk.cuda_capabilities_enabled(ordinal)
+        except (ValueError, RuntimeError) as error:
+            if requested:
+                raise SystemExit(f"Requested CUDA device cuda:{ordinal} is unavailable: {error}") from error
+            continue
+        device = GpuDevice(ordinal, capabilities, nk.stream_init_cuda(ordinal))
+        weakref.finalize(device, nk.stream_free_cuda, device.stream)
+        if settings.output == "table":
+            print(f"- GPU device: cuda:{ordinal} running {capabilities!r}")
+        devices.append(device)
+    return devices
+
+
+def gpu_check(name: str, found: Any, expected: Any, upper_only: bool, tolerance: float) -> str | None:
+    """Names the first mismatch between the first round of `name` and the CPU's `expected` leading rows,
+    beyond `tolerance` of each expected value or of their root mean square if larger, as a sum near
+    zero carries the rounding of its large terms, or None. A symmetric result is compared above its
+    diagonal only, where a vector's distance to itself cancels to rounding noise."""
+    expected = np.asarray(expected, dtype=np.float64)
+    found = np.asarray(found, dtype=np.float64)[: expected.shape[0]]
+    scale = np.maximum(np.abs(expected), np.sqrt(np.mean(expected**2)))
+    mismatched = ~(np.abs(found - expected) <= tolerance * scale)
+    if upper_only:
+        mismatched &= np.triu(np.ones(expected.shape, dtype=bool), k=1)
+    if not mismatched.any():
+        return None
+    row, column = np.argwhere(mismatched)[0]
+    return (
+        f"{name} disagrees with the CPU on its first round at [{row}, {column}]: "
+        f"{found[row, column]} against {expected[row, column]}"
+    )
+
+
+# endregion: GPU Devices
 
 # region: Timing Utilities
 

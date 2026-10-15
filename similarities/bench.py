@@ -6,6 +6,8 @@ Computes pairwise distance matrices using packed kernels (angulars_packed / eucl
 
 The SYRK rows score one matrix against itself, A × Aᵀ, with the `*_symmetric` kernels filling the upper triangle for NumKong and `pdist` returning the condensed upper triangle for SciPy, and count only the n(n+1)/2 pairs of that triangle times the depth.
 
+With a CUDA build of NumKong and PyTorch's, each GPU in NUMWARS_DEVICES adds rows named like `similarities/angular/numkong/bf16<cuda:0>` for every dtype NumKong's CUDA kernels take through DLPack. CuPy races them the way the CPU rivals do, a cuBLAS product and one fused norm epilogue over norms computed beforehand, and `torch.cdist` races the Euclidean ones. Operands are random PyTorch tensors, every round synchronizes, and each first round is checked against NumKong's CPU kernel on the leading rows.
+
 Can be run with uv:
     uv run --with numkong,numpy,scipy,tabulate similarities/bench.py
 
@@ -23,9 +25,12 @@ import scipy
 import scipy.spatial.distance as spd
 
 from numwars import (
+    GpuDevice,
     Settings,
     calculate_gso_per_sec,
     format_duration,
+    gpu_check,
+    gpu_devices,
     measure_average_duration,
     normalize_dtype_name,
     numkong_dtype_name,
@@ -53,6 +58,7 @@ class BenchmarkResult:
     batch_size: int
     duration_secs: float
     gso_per_sec: float
+    device: str = ""
 
 
 def display_signature_name(input_dtype: str, output_dtype: str) -> str:
@@ -236,11 +242,178 @@ def benchmark_numkong_symmetric(
     )
 
 
+# Relative error a GPU row may show against the CPU, which sums the depth in another order.
+GPU_TOLERANCE = 1e-3
+
+# Leading rows of a GPU result its first round is checked on.
+CHECKED_ROWS = 16
+
+# The libraries with GPU rows, by the slug their row names carry.
+GPU_LIBRARIES = {"numkong": "NumKong", "cupy": "CuPy", "pytorch": "PyTorch"}
+
+# NumKong's CUDA dtypes and the PyTorch type holding their bits. The packed `e2m1`, `i4` and `u4` hold
+# two dimensions per byte. FP6 is missing, as no Python library hands it to DLPack on a GPU.
+GPU_DTYPES = {
+    "f64": "float64",
+    "f32": "float32",
+    "f16": "float16",
+    "bf16": "bfloat16",
+    "e4m3": "float8_e4m3fn",
+    "e5m2": "float8_e5m2",
+    "e2m1": "uint8",
+    "i8": "int8",
+    "u8": "uint8",
+    "i4": "uint8",
+    "u4": "uint8",
+}
+
+PACKED_KERNELS = {"angular": nk.angulars_packed, "euclidean": nk.euclideans_packed}
+
+# The norm epilogues CuPy fuses after its cuBLAS product, reading norms computed beforehand.
+EPILOGUES = {
+    "angular": ("T dot, F inverse_a, F inverse_b", "F distance", "distance = 1 - (F)dot * inverse_a * inverse_b"),
+    "euclidean": (
+        "T dot, F squared_a, F squared_b",
+        "F distance",
+        "distance = sqrt(max(squared_a + squared_b - 2 * (F)dot, (F)0))",
+    ),
+}
+
+
+def gpu_operands(device: GpuDevice, rows: int, depth: int, dtype_str: str, seed: int):
+    """Random `[rows, depth]` operands as a host array NumKong's CPU kernels read, and the same bits in
+    a PyTorch tensor on `device`: floats in [-1, 1), `i8` within ±100, `u8` up to 200, any packed nibbles."""
+    import torch
+
+    rng = np.random.default_rng(seed)
+    if GPU_DTYPES[dtype_str] == "uint8" and dtype_str != "u8":
+        host = rng.integers(0, 256, size=(rows, depth // 2), dtype=np.uint8)
+    elif dtype_str in ("i8", "u8"):
+        host = rng.integers(*((-100, 101) if dtype_str == "i8" else (0, 201)), size=(rows, depth))
+        host = host.astype(parse_numpy_dtype(dtype_str))
+    else:
+        host = rng.uniform(-1.0, 1.0, size=(rows, depth)).astype(np.float32).astype(parse_numpy_dtype(dtype_str))
+    bits = torch.from_numpy(host.view(f"u{host.itemsize}"))
+    return host, bits.to(f"cuda:{device.ordinal}").view(getattr(torch, GPU_DTYPES[dtype_str]))
+
+
+def gpu_rivals(metric: str, dtype_str: str, a, b) -> dict:
+    """The CuPy and PyTorch rounds of `metric` between the rows of `a` and `b`, by library, each returning
+    its synchronized output: CuPy's cuBLAS product and fused epilogue, and `torch.cdist` for Euclidean."""
+    import torch
+
+    rounds = {}
+    try:
+        import cupy
+    except ImportError:
+        cupy = None
+    if cupy is not None and dtype_str in ("f64", "f32", "f16", "bf16"):
+        left, right = cupy.from_dlpack(a), cupy.from_dlpack(b)
+        precision = cupy.float64 if dtype_str == "f64" else cupy.float32
+        squared_a = (left.astype(precision) ** 2).sum(axis=1)
+        squared_b = (right.astype(precision) ** 2).sum(axis=1)
+        if metric == "angular":
+            squared_a, squared_b = 1 / cupy.sqrt(squared_a), 1 / cupy.sqrt(squared_b)
+        norms = squared_a[:, None], squared_b[None, :]
+        product = cupy.empty((left.shape[0], right.shape[0]), dtype=left.dtype)
+        distances = cupy.empty(product.shape, dtype=precision)
+        epilogue = cupy.ElementwiseKernel(*EPILOGUES[metric], name=f"numwars_{metric}s")
+
+        def cupy_round():
+            epilogue(cupy.matmul(left, right.T, out=product), *norms, distances)
+            torch.cuda.synchronize(a.device)
+            return torch.from_dlpack(distances)
+
+        rounds["cupy"] = cupy_round
+    if metric == "euclidean" and dtype_str in ("f64", "f32"):
+
+        def pytorch_round():
+            distances = torch.cdist(a, b)
+            torch.cuda.synchronize(a.device)
+            return distances
+
+        rounds["pytorch"] = pytorch_round
+    return rounds
+
+
+def benchmark_gpu(
+    device: GpuDevice, workload: str, batch_size: int, ndim: int, dtype_str: str, settings: Settings
+) -> list[BenchmarkResult]:
+    """NumKong's `workload` on `device` and its rivals, each first round checked against NumKong's CPU kernel."""
+    import torch
+
+    metric = workload.removeprefix("symmetric/")
+    symmetric = workload != metric
+    names = {library: f"similarities/{workload}/{library}/{dtype_str}{device.label}" for library in GPU_LIBRARIES}
+    if not any(map(settings.selects, names.values())):
+        return []
+    a_host, a = gpu_operands(device, batch_size, ndim, dtype_str, settings.seed)
+    b_host, b = (a_host, a) if symmetric else gpu_operands(device, batch_size, ndim, dtype_str, settings.seed + 1)
+    nk_dtype = numkong_dtype_name(dtype_str)
+    expected = np.asarray(PACKED_KERNELS[metric](a_host[:CHECKED_ROWS], nk.dots_pack(b_host, dtype=nk_dtype)))
+    output = torch.empty((batch_size, batch_size), dtype=getattr(torch, str(expected.dtype)), device=a.device)
+    a_tensor, output_tensor = nk.from_dlpack(a), nk.from_dlpack(output)
+    if symmetric:
+        kernel = SYMMETRIC_KERNELS[metric]
+
+        def numkong_round():
+            kernel(a_tensor, dtype=nk_dtype, out=output_tensor, stream=device.stream)
+            nk.synchronize(device.capabilities, stream=device.stream)
+            return output
+
+    else:
+        pack_bytes = nk.PackedMatrix.pack_size(batch_size, ndim, nk_dtype, capabilities=device.capabilities)
+        storage = torch.empty(pack_bytes, dtype=torch.uint8, device=a.device)
+        packed = nk.dots_pack(nk.from_dlpack(b), dtype=nk_dtype, out=nk.from_dlpack(storage), stream=device.stream)
+        kernel = PACKED_KERNELS[metric]
+
+        def numkong_round():
+            kernel(a_tensor, packed, out=output_tensor, stream=device.stream)
+            nk.synchronize(device.capabilities, stream=device.stream)
+            return output
+
+    operations = symmetric_operations(batch_size, ndim) if symmetric else batch_size * batch_size * ndim
+    results = []
+    for library, one_round in {"numkong": numkong_round, **gpu_rivals(metric, dtype_str, a, b)}.items():
+        name = names[library]
+        if not settings.selects(name):
+            continue
+        if settings.output == "table":
+            print(f"Benchmarking {name}")
+        found = one_round()
+        # Rivals keep the product in their input precision, which may be coarser than the depth's error.
+        tolerance = max(GPU_TOLERANCE, 2 * torch.finfo(a.dtype).eps if library != "numkong" else 0)
+        mismatch = gpu_check(name, found[:CHECKED_ROWS].double().cpu().numpy(), expected, symmetric, tolerance)
+        if mismatch and library == "numkong":
+            raise SystemExit(mismatch)
+        if mismatch:
+            print(f"Skipping a rival that {mismatch}")
+            continue
+        duration = measure_average_duration(one_round, settings)
+        output_dtype = normalize_dtype_name(str(found.dtype).removeprefix("torch."))
+        results.append(
+            BenchmarkResult(
+                library=GPU_LIBRARIES[library],
+                metric=workload,
+                input_dtype=dtype_str,
+                output_dtype=output_dtype,
+                display_signature=display_signature_name(dtype_str, output_dtype),
+                ndim=ndim,
+                batch_size=batch_size,
+                duration_secs=duration,
+                gso_per_sec=calculate_gso_per_sec(operations, duration),
+                device=device.label,
+            )
+        )
+    torch.cuda.empty_cache()
+    return results
+
+
 def result_to_entry(result: BenchmarkResult) -> dict:
     return {
         "suite": "similarities",
         "workload": result.metric,
-        "benchmark_id": f"similarities/{result.metric}/{result.library.lower()}/{result.input_dtype}",
+        "benchmark_id": f"similarities/{result.metric}/{result.library.lower()}/{result.input_dtype}{result.device}",
         "library": result.library,
         "metric": result.metric.removeprefix("symmetric/"),
         "dtype": result.input_dtype,
@@ -257,7 +430,7 @@ def result_to_entry(result: BenchmarkResult) -> dict:
 
 
 def main():
-    settings = read_settings()
+    settings = read_settings("similarities")
     if settings.output == "table":
         print_settings(settings)
 
@@ -319,6 +492,11 @@ def main():
             if settings.output == "table":
                 print(f"  Error: {e}")
 
+    for device in gpu_devices(settings):
+        for workload in ("angular", "symmetric/angular", "euclidean", "symmetric/euclidean"):
+            for dtype in GPU_DTYPES:
+                all_results.extend(benchmark_gpu(device, workload, batch_size, ndim, dtype, settings))
+
     if settings.output == "json":
         print(
             json.dumps(
@@ -345,7 +523,7 @@ def main():
     print()
     table_rows = [
         {
-            "Library": result.library,
+            "Library": f"{result.library}{result.device}",
             "Kernel": "SYRK" if result.metric.startswith("symmetric/") else "GEMM",
             "Metric": result.metric.removeprefix("symmetric/"),
             "Precision": result.display_signature,

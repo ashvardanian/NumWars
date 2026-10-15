@@ -124,7 +124,7 @@ def result_to_entry(result: BenchmarkResult) -> dict:
 
 
 def main() -> None:
-    settings = read_settings()
+    settings = read_settings("geospatial")
     if settings.output == "table":
         print_settings(settings)
     rows, columns = settings.dims_height, settings.dims_width

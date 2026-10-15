@@ -304,7 +304,7 @@ def result_to_entry(result: BenchmarkResult) -> dict:
 
 
 def main():
-    settings = read_settings()
+    settings = read_settings("similarity")
     scipy = env_flag("NUMWARS_SCIPY", False)
     if settings.output == "table":
         print_settings(settings)

@@ -1207,7 +1207,7 @@ mod tests {
 // region: Main
 
 fn main() {
-    let settings = Settings::read();
+    let settings = Settings::read("similarity");
     Capabilities::cpu_enabled()
         .configure_thread()
         .expect("Failed to configure the thread");

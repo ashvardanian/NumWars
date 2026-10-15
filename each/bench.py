@@ -165,7 +165,7 @@ def result_to_entry(result: BenchmarkResult) -> dict:
 
 
 def main():
-    settings = read_settings()
+    settings = read_settings("each")
     if settings.output == "table":
         print_settings(settings)
 

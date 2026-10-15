@@ -14,6 +14,12 @@
 //! only the n(n+1)/2 pairs of one triangle, so a full product earns no credit for the mirrored
 //! half.
 //!
+//! A `cuda` build adds GEMM and SYRK groups for each GPU in NUMWARS_DEVICES, named like
+//! `dots/bf16/16384x16384x16384<cuda:0>`, for every dtype NumKong has CUDA kernels for. Their
+//! operands are random and live in unified memory, every round synchronizes the stream, and the
+//! first round is checked against NumKong's CPU kernel on the leading rows. The rival is cuBLASLt
+//! for the dtypes it multiplies, with cuBLAS's own SYRK for f32 and f64.
+//!
 //! Run with:
 //! ```bash
 //! # Run all benchmarks
@@ -43,6 +49,13 @@ use numkong::{
 };
 
 use numwars::{pack_dots_matrix, propagate_thread_count, try_spawn_pool, Settings};
+
+#[cfg(feature = "cuda")]
+use cudarc::cublas::{result as cublas, sys as cublas_sys};
+#[cfg(feature = "cuda")]
+use numkong::UnifiedAllocator;
+#[cfg(feature = "cuda")]
+use numwars::{gpu_check, gpu_devices, CublasLtGemm, CublasLtLayout, GpuDevice, GpuMetric, GpuScalar};
 
 /// Resolve the parallelism setting for faer from the thread count.
 fn faer_parallelism(threads: usize) -> faer::Par {
@@ -461,6 +474,268 @@ fn bench_dots(c: &mut Criterion, settings: &Settings) {
 
 // endregion
 
+// region: GPU Rows
+
+/// Leading rows of a GPU result its first round is checked on.
+#[cfg(feature = "cuda")]
+const CHECKED_ROWS: usize = 16;
+
+/// Relative error a GPU row may show against the CPU, which sums the depth in another order.
+#[cfg(feature = "cuda")]
+const GPU_TOLERANCE: f64 = 1e-3;
+
+/// cuBLAS's own SYRK over row-major `[count, depth]` vectors, whose lower column-major triangle
+/// is the upper row-major one.
+#[cfg(feature = "cuda")]
+type CublasSyrk<Scalar> = unsafe fn(
+    cublas_sys::cublasHandle_t,
+    *const Scalar,
+    *mut <Scalar as GpuScalar>::Product,
+    usize,
+    usize,
+) -> cublas_sys::cublasStatus_t;
+
+#[cfg(feature = "cuda")]
+unsafe fn cublas_ssyrk(
+    handle: cublas_sys::cublasHandle_t,
+    vectors: *const f32,
+    gram: *mut f32,
+    count: usize,
+    depth: usize,
+) -> cublas_sys::cublasStatus_t {
+    use cublas_sys::{cublasFillMode_t::CUBLAS_FILL_MODE_LOWER, cublasOperation_t::CUBLAS_OP_T};
+    let (count, depth) = (count as i64, depth as i64);
+    unsafe {
+        cublas_sys::cublasSsyrk_v2_64(
+            handle,
+            CUBLAS_FILL_MODE_LOWER,
+            CUBLAS_OP_T,
+            count,
+            depth,
+            &1.0,
+            vectors,
+            depth,
+            &0.0,
+            gram,
+            count,
+        )
+    }
+}
+
+#[cfg(feature = "cuda")]
+unsafe fn cublas_dsyrk(
+    handle: cublas_sys::cublasHandle_t,
+    vectors: *const f64,
+    gram: *mut f64,
+    count: usize,
+    depth: usize,
+) -> cublas_sys::cublasStatus_t {
+    use cublas_sys::{cublasFillMode_t::CUBLAS_FILL_MODE_LOWER, cublasOperation_t::CUBLAS_OP_T};
+    let (count, depth) = (count as i64, depth as i64);
+    unsafe {
+        cublas_sys::cublasDsyrk_v2_64(
+            handle,
+            CUBLAS_FILL_MODE_LOWER,
+            CUBLAS_OP_T,
+            count,
+            depth,
+            &1.0,
+            vectors,
+            depth,
+            &0.0,
+            gram,
+            count,
+        )
+    }
+}
+
+/// NumKong's CPU result for the leading rows of `a` against every row of `b`, the reference each
+/// GPU row's first round must match.
+#[cfg(feature = "cuda")]
+fn cpu_leading_rows<T: GpuScalar>(
+    a: &Tensor<T, UnifiedAllocator>,
+    b: &Tensor<T, UnifiedAllocator>,
+) -> Tensor<T::Accumulator> {
+    let (rows, depth) = (a.shape()[0].min(CHECKED_ROWS), a.shape()[1]);
+    let values = rows * depth / T::dimensions_per_value();
+    let leading = Tensor::<T>::from_slice(&a.as_slice()[..values], &[rows, depth]).expect("Failed to copy rows");
+    let packed = DotsPackedMatrix::new(b).expect("Failed to pack B on the CPU");
+    leading.dots_packed(&packed).expect("CPU dots failed")
+}
+
+/// Adds the cuBLASLt product `a × bᵀ` to `group` as `cublaslt`, once its first round matches
+/// `expected`, the full product of a SYRK group included.
+#[cfg(feature = "cuda")]
+fn bench_cublaslt<T: GpuScalar>(
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    name: &str,
+    device: &GpuDevice,
+    a: &Tensor<T, UnifiedAllocator>,
+    b: &Tensor<T, UnifiedAllocator>,
+    expected: &[T::Accumulator],
+    upper_only: bool,
+) {
+    let Some(types) = T::CUBLASLT else {
+        return;
+    };
+    let (rows, columns, depth) = (a.shape()[0], b.shape()[0], a.shape()[1]);
+    let gemm = match CublasLtGemm::new(device, types, CublasLtLayout::new(rows, columns, depth)) {
+        Ok(gemm) => gemm,
+        Err(error) => return println!("{name}/cublaslt is unavailable: {error}"),
+    };
+    let mut product =
+        Tensor::<T::Product, _>::zeros_in(&[rows, columns], device.allocator()).expect("Failed to allocate");
+    let launch = |product: &mut Tensor<T::Product, UnifiedAllocator>| {
+        gemm.launch(a, b, product);
+        device.synchronize();
+    };
+    launch(&mut product);
+    match gpu_check(
+        &format!("{name}/cublaslt"),
+        product.as_slice(),
+        expected,
+        columns,
+        upper_only,
+        GPU_TOLERANCE,
+    ) {
+        Ok(()) => {
+            group.bench_function("cublaslt", |bench| bench.iter(|| launch(&mut product)));
+        }
+        Err(error) => println!("Skipping a rival that {error}"),
+    }
+}
+
+/// Adds cuBLAS's own SYRK of `vectors` to `group` as `cublas`, once its first round matches `expected`.
+#[cfg(feature = "cuda")]
+fn bench_cublas_syrk<T: GpuScalar>(
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    name: &str,
+    device: &GpuDevice,
+    vectors: &Tensor<T, UnifiedAllocator>,
+    expected: &[T::Accumulator],
+    syrk: CublasSyrk<T>,
+) {
+    let (count, depth) = (vectors.shape()[0], vectors.shape()[1]);
+    let handle = cublas::create_handle().expect("Failed to create a cuBLAS handle");
+    unsafe { cublas::set_stream(handle, device.stream.cast()) }.expect("Failed to set the cuBLAS stream");
+    let mut gram = Tensor::<T::Product, _>::zeros_in(&[count, count], device.allocator()).expect("Failed to allocate");
+    let launch = |gram: &mut Tensor<T::Product, UnifiedAllocator>| {
+        let status = unsafe { syrk(handle, vectors.as_ptr(), gram.as_mut_ptr(), count, depth) };
+        assert_eq!(
+            status,
+            cublas_sys::cublasStatus_t::CUBLAS_STATUS_SUCCESS,
+            "cuBLAS SYRK failed"
+        );
+        device.synchronize();
+    };
+    launch(&mut gram);
+    match gpu_check(
+        &format!("{name}/cublas"),
+        gram.as_slice(),
+        expected,
+        count,
+        true,
+        GPU_TOLERANCE,
+    ) {
+        Ok(()) => {
+            group.bench_function("cublas", |bench| bench.iter(|| launch(&mut gram)));
+        }
+        Err(error) => println!("Skipping a rival that {error}"),
+    }
+    unsafe { cublas::destroy_handle(handle) }.expect("Failed to destroy the cuBLAS handle");
+}
+
+/// GEMM and SYRK groups of `T` on each GPU, over random operands in unified memory, each round
+/// synchronized and each first round checked against NumKong's CPU kernel.
+#[cfg(feature = "cuda")]
+fn bench_dtype_gpu<T: GpuScalar>(
+    c: &mut Criterion,
+    settings: &Settings,
+    devices: &[GpuDevice],
+    dtype: &str,
+    syrk: Option<CublasSyrk<T>>,
+) {
+    let (m, n, k) = (settings.dims_height, settings.dims_width, settings.dims_depth);
+    let seed = u64::from(settings.seed);
+    for device in devices {
+        let name = format!("dots/{dtype}/{m}x{n}x{k}{}", device.label());
+        if settings.selects(&name) {
+            let a = device.random::<T>(&[m, k], seed);
+            let b = device.random::<T>(&[n, k], seed + 1);
+            let mut product =
+                Tensor::<T::Accumulator, _>::zeros_in(&[m, n], device.allocator()).expect("Failed to allocate C");
+            let Some(packed) = device.pack(&b) else {
+                println!("{name} is unavailable: NumKong has no CUDA kernel for {dtype}");
+                continue;
+            };
+            let launch = |product: &mut Tensor<T::Accumulator, UnifiedAllocator>| {
+                device
+                    .packed(GpuMetric::Dots, &a, &packed, product)
+                    .expect("No packed CUDA kernel");
+                device.synchronize();
+            };
+            launch(&mut product);
+            let expected = cpu_leading_rows(&a, &b);
+            gpu_check(&name, product.as_slice(), expected.as_slice(), n, false, GPU_TOLERANCE)
+                .unwrap_or_else(|error| panic!("{error}"));
+            let mut group = c.benchmark_group(&name);
+            group.throughput(Throughput::Elements(2 * m as u64 * n as u64 * k as u64));
+            group.bench_function("numkong", |bench| bench.iter(|| launch(&mut product)));
+            bench_cublaslt(&mut group, &name, device, &a, &b, expected.as_slice(), false);
+            group.finish();
+        }
+
+        let name = format!("dots/symmetric/{dtype}/{m}x{k}{}", device.label());
+        if settings.selects(&name) {
+            let a = device.random::<T>(&[m, k], seed);
+            let mut gram =
+                Tensor::<T::Accumulator, _>::zeros_in(&[m, m], device.allocator()).expect("Failed to allocate C");
+            if device.symmetric(GpuMetric::Dots, &a, &mut gram).is_none() {
+                println!("{name} is unavailable: NumKong has no CUDA kernel for {dtype}");
+                continue;
+            }
+            device.synchronize();
+            let expected = cpu_leading_rows(&a, &a);
+            gpu_check(&name, gram.as_slice(), expected.as_slice(), m, true, GPU_TOLERANCE)
+                .unwrap_or_else(|error| panic!("{error}"));
+            let mut group = c.benchmark_group(&name);
+            let pairs = m as u64 * (m as u64 + 1) / 2;
+            group.throughput(Throughput::Elements(2 * pairs * k as u64));
+            group.bench_function("numkong", |bench| {
+                bench.iter(|| {
+                    device.symmetric(GpuMetric::Dots, &a, &mut gram);
+                    device.synchronize();
+                })
+            });
+            match syrk {
+                Some(syrk) => bench_cublas_syrk(&mut group, &name, device, &a, expected.as_slice(), syrk),
+                None => bench_cublaslt(&mut group, &name, device, &a, &a, expected.as_slice(), true),
+            }
+            group.finish();
+        }
+    }
+}
+
+/// Every dtype NumKong's CUDA kernels take, on each GPU.
+#[cfg(feature = "cuda")]
+fn bench_dots_gpu(c: &mut Criterion, settings: &Settings, devices: &[GpuDevice]) {
+    bench_dtype_gpu::<f32>(c, settings, devices, "f32", Some(cublas_ssyrk));
+    bench_dtype_gpu::<f64>(c, settings, devices, "f64", Some(cublas_dsyrk));
+    bench_dtype_gpu::<i8>(c, settings, devices, "i8", None);
+    bench_dtype_gpu::<u8>(c, settings, devices, "u8", None);
+    bench_dtype_gpu::<bf16>(c, settings, devices, "bf16", None);
+    bench_dtype_gpu::<f16>(c, settings, devices, "f16", None);
+    bench_dtype_gpu::<e4m3>(c, settings, devices, "e4m3", None);
+    bench_dtype_gpu::<e5m2>(c, settings, devices, "e5m2", None);
+    bench_dtype_gpu::<e2m3>(c, settings, devices, "e2m3", None);
+    bench_dtype_gpu::<e3m2>(c, settings, devices, "e3m2", None);
+    bench_dtype_gpu::<e2m1x2>(c, settings, devices, "e2m1", None);
+    bench_dtype_gpu::<i4x2>(c, settings, devices, "i4", None);
+    bench_dtype_gpu::<u4x2>(c, settings, devices, "u4", None);
+}
+
+// endregion
+
 // region: Tests
 
 #[cfg(test)]
@@ -510,12 +785,16 @@ mod tests {
 // endregion
 
 fn main() {
-    let settings = Settings::read();
+    let settings = Settings::read("dots");
     Capabilities::cpu_enabled()
         .configure_thread()
         .expect("Failed to configure the thread");
     propagate_thread_count(settings.threads);
+    #[cfg(feature = "cuda")]
+    let devices = gpu_devices(&settings);
     let mut criterion = numwars::configure_criterion(&settings);
     bench_dots(&mut criterion, &settings);
+    #[cfg(feature = "cuda")]
+    bench_dots_gpu(&mut criterion, &settings, &devices);
     criterion.final_summary();
 }

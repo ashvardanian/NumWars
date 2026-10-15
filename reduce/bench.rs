@@ -472,7 +472,7 @@ mod tests {
 // region: Main
 
 fn main() {
-    let settings = Settings::read();
+    let settings = Settings::read("reduce");
     Capabilities::cpu_enabled()
         .configure_thread()
         .expect("Failed to configure the thread");
