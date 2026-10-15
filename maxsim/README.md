@@ -1,24 +1,55 @@
 # MaxSim Benchmarks
 
-ColBERT-style late-interaction scoring benchmarks comparing NumKong against ndarray.
+ColBERT-style late-interaction scoring benchmarks comparing NumKong against ndarray and NumPy.
 
-## Rust
+Speeds are in scalar operations per second: GSO/s.
+Speedup is NumKong's speed over the fastest alternative on the same chip, in the same language, on the same operation and input type.
+A `–` marks a row without an alternative, `✗` a result that failed its check, and `⋯` an alternative not measured on this chip.
+NumKong widens its outputs: bf16 and f16 → f32, f32 → f64.
 
-| Library                              | Precision    |       GSO/s |
-| :----------------------------------- | :----------- | ----------: |
-| `numkong::MaxSimPackedMatrix::score` | _f32 → f64_  | __1483.41__ |
-| `numkong::MaxSimPackedMatrix::score` | _bf16 → f32_ |  __983.57__ |
-| `numkong::MaxSimPackedMatrix::score` | _f16 → f32_  |  __980.33__ |
-| ndarray Q @ Dᵀ max-reduce            | _f32 → f32_  |       58.37 |
+## Intel Xeon5 Emerald Rapids
 
-## Python
+### Rust
 
-| Library                 | Precision    |       GSO/s |
-| :---------------------- | :----------- | ----------: |
-| `numkong.maxsim_packed` | _f32 → f64_  | __2425.72__ |
-| `numpy` matmul          | _f32 → f32_  |     1525.56 |
-| `numkong.maxsim_packed` | _bf16 → f32_ | __1236.30__ |
-| `numkong.maxsim_packed` | _f16 → f32_  |  __696.78__ |
+| NumKong                                            |       Speed | Speedup | Alternative                 |      Speed |
+| :------------------------------------------------- | ----------: | ------: | :-------------------------- | ---------: |
+| `numkong::MaxSimPackedMatrix::score`, _f32 → f64_  |  15.0 GSO/s |   0.16× | `ndarray::dot`, _f32 → f32_ | 91.8 GSO/s |
+| `numkong::MaxSimPackedMatrix::score`, _bf16 → f32_ | 1,321 GSO/s |       – | –                           |          – |
+| `numkong::MaxSimPackedMatrix::score`, _f16 → f32_  |  30.9 GSO/s |       – | –                           |          – |
+
+> Measured October 14, 2026.
+
+### Python
+
+| NumKong                               |       Speed | Speedup | Alternative                 |     Speed |
+| :------------------------------------ | ----------: | ------: | :-------------------------- | --------: |
+| `numkong.maxsim_packed`, _f32 → f64_  |   110 GSO/s |   0.63× | `numpy.matmul`, _f32 → f32_ | 175 GSO/s |
+| `numkong.maxsim_packed`, _bf16 → f32_ | 1,237 GSO/s |       – | –                           |         – |
+| `numkong.maxsim_packed`, _f16 → f32_  |   194 GSO/s |       – | –                           |         – |
+
+> Measured October 14, 2026.
+
+## Apple M5 Pro
+
+### Rust
+
+| NumKong                                            |       Speed | Speedup | Alternative                 |      Speed |
+| :------------------------------------------------- | ----------: | ------: | :-------------------------- | ---------: |
+| `numkong::MaxSimPackedMatrix::score`, _f32 → f64_  | 1,483 GSO/s |   25.4× | `ndarray::dot`, _f32 → f32_ | 58.4 GSO/s |
+| `numkong::MaxSimPackedMatrix::score`, _bf16 → f32_ |   984 GSO/s |       – | –                           |          – |
+| `numkong::MaxSimPackedMatrix::score`, _f16 → f32_  |   980 GSO/s |       – | –                           |          – |
+
+> Measured March 22, 2026.
+
+### Python
+
+| NumKong                               |       Speed | Speedup | Alternative                 |       Speed |
+| :------------------------------------ | ----------: | ------: | :-------------------------- | ----------: |
+| `numkong.maxsim_packed`, _f32 → f64_  | 2,426 GSO/s |   1.59× | `numpy.matmul`, _f32 → f32_ | 1,526 GSO/s |
+| `numkong.maxsim_packed`, _bf16 → f32_ | 1,236 GSO/s |       – | –                           |           – |
+| `numkong.maxsim_packed`, _f16 → f32_  |   697 GSO/s |       – | –                           |           – |
+
+> Measured March 22, 2026.
 
 ## Run It
 
