@@ -19,7 +19,7 @@ license = {text = "Apache-2.0"}
 name = "numwars"
 readme = "README.md"
 requires-python = ">=3.10"
-version = "0.1.0"
+version = "8.0.0-rc.1"
 
 [project.optional-dependencies]
 all = ["numwars[similarity,each,dots,geospatial,mesh,reduce,similarities,attention,ml]"]

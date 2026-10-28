@@ -1046,7 +1046,7 @@ wheels = [
 
 [[package]]
 name = "numwars"
-version = "0.1.0"
+version = "8.0.0rc1"
 source = { editable = "." }
 
 [package.optional-dependencies]
